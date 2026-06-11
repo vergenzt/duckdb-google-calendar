@@ -1,0 +1,15 @@
+# name: test/sql/google_calendar.test
+# description: Credential-free smoke test for the google_calendar extension
+# group: [sql]
+
+require google_calendar
+
+# The google_calendar secret type is registered (access_token provider works offline)
+statement ok
+CREATE SECRET gcal_smoke (TYPE google_calendar, PROVIDER access_token, token 'dummy-token');
+
+# ATTACH referencing a missing secret fails fast with a clear message (no network call)
+statement error
+ATTACH 'primary' AS cal (TYPE google_calendar, SECRET does_not_exist);
+----
+not found

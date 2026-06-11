@@ -1,0 +1,13 @@
+# Service-account key — store in 1Password, never commit
+sa.json
+
+# Local variable files (keep the example)
+*.tfvars
+!*.tfvars.example
+
+# OpenTofu / Terraform working files & state
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
