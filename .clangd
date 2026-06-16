@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://www.schemastore.org/clangd.json
+
+If:
+  PathMatch: "^duckdb/.*"
+CompileFlags:
+  CompilationDatabase: duckdb/build/release
+  Add: -Wno-unqualified-std-cast-call
+
+---
+CompileFlags:
+  CompilationDatabase: build/release
