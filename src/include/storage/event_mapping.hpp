@@ -12,10 +12,6 @@
 namespace duckdb {
 namespace gcal_map {
 
-// events-schema column order (must match AddEventsColumns / Slice 6):
-// 0 id, 1 summary, 2 description, 3 location, 4 status, 5 html_link, 6 created, 7 updated,
-// 8 start, 9 end, 10 all_day, 11 attendees, 12 recurrence, 13 reminders, 14 conference_data
-
 inline string FormatRfc3339(const Value &val) {
 	auto tstz = val.GetValue<timestamp_tz_t>();
 	timestamp_t ts(tstz.value);
@@ -57,8 +53,8 @@ inline void SetJsonPassthrough(nlohmann::json &event, const char *key, const Val
 }
 
 inline bool ExistingAllDay(const nlohmann::json &event) {
-	return event.contains("start") && event["start"].is_object() && event["start"].contains("date") &&
-	       !event["start"].contains("dateTime");
+	return event.contains(EVENT_COL_START_AT.Name()) && event[EVENT_COL_START_AT.Name()].is_object() && event[EVENT_COL_START_AT.Name()].contains("date") &&
+	       !event[EVENT_COL_START_AT.Name()].contains("dateTime");
 }
 
 // Build a full event body from an INSERT row (all 15 columns present, schema order).
@@ -70,20 +66,20 @@ inline nlohmann::json RowToEvent(DataChunk &chunk, idx_t row) {
 			event[key] = v.ToString();
 		}
 	};
-	set_str("summary", 1);
-	set_str("description", 2);
-	set_str("location", 3);
-	set_str("status", 4);
+	set_str(EVENT_COL_SUMMARY.Name(), 1);
+	set_str(EVENT_COL_DESCRIPTION.Name(), 2);
+	set_str(EVENT_COL_LOCATION.Name(), 3);
+	set_str(EVENT_COL_STATUS.Name(), 4);
 
 	auto all_day_v = chunk.GetValue(10, row);
 	bool all_day = !all_day_v.IsNull() && BooleanValue::Get(all_day_v);
 	auto start_v = chunk.GetValue(8, row);
 	auto end_v = chunk.GetValue(9, row);
 	if (!start_v.IsNull()) {
-		event["start"] = TimeNode(start_v, all_day);
+		event[EVENT_COL_START_AT.Name()] = TimeNode(start_v, all_day);
 	}
 	if (!end_v.IsNull()) {
-		event["end"] = TimeNode(end_v, all_day);
+		event[EVENT_COL_END_AT.Name()] = TimeNode(end_v, all_day);
 	}
 
 	SetJsonPassthrough(event, "attendees", chunk.GetValue(11, row));
@@ -127,35 +123,35 @@ inline void ApplySet(nlohmann::json &event, idx_t schema_index, const Value &val
 	};
 	switch (schema_index) {
 	case 1:
-		set_or_remove("summary");
+		set_or_remove(EVENT_COL_SUMMARY.Name());
 		break;
 	case 2:
-		set_or_remove("description");
+		set_or_remove(EVENT_COL_DESCRIPTION.Name());
 		break;
 	case 3:
-		set_or_remove("location");
+		set_or_remove(EVENT_COL_LOCATION.Name());
 		break;
 	case 4:
-		set_or_remove("status");
+		set_or_remove(EVENT_COL_STATUS.Name());
 		break;
 	case 8:
 		if (val.IsNull()) {
-			event.erase("start");
+			event.erase(EVENT_COL_START_AT.Name());
 		} else {
-			event["start"] = TimeNode(val, all_day);
+			event[EVENT_COL_START_AT.Name()] = TimeNode(val, all_day);
 		}
 		break;
 	case 9:
 		if (val.IsNull()) {
-			event.erase("end");
+			event.erase(EVENT_COL_END_AT.Name());
 		} else {
-			event["end"] = TimeNode(val, all_day);
+			event[EVENT_COL_END_AT.Name()] = TimeNode(val, all_day);
 		}
 		break;
 	case 10:
 		// all_day handled via the all_day flag; re-encode existing nodes if start/end were not also SET.
-		ReencodeTimeNode(event, "start", all_day);
-		ReencodeTimeNode(event, "end", all_day);
+		ReencodeTimeNode(event, EVENT_COL_START_AT.Name(), all_day);
+		ReencodeTimeNode(event, EVENT_COL_END_AT.Name(), all_day);
 		break;
 	case 11:
 		SetJsonPassthrough(event, "attendees", val);

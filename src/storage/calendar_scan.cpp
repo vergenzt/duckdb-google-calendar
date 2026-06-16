@@ -16,6 +16,7 @@
 
 #include "calendar/client.hpp"
 #include "calendar/util/query.hpp"
+#include "storage/event_schema.hpp"
 
 #include <algorithm>
 
@@ -95,7 +96,7 @@ static bool IsStartColumn(LogicalGet &get, Expression &expr) {
 		return false;
 	}
 	auto base_idx = col_ids[cref.binding.column_index].GetPrimaryIndex();
-	return base_idx < get.names.size() && get.names[base_idx] == "start";
+	return base_idx < get.names.size() && get.names[base_idx] == EVENT_COL_START_AT.Name();
 }
 
 // Fold a constant-foldable expression into a TIMESTAMP WITH TIME ZONE value. The bound literal
@@ -240,8 +241,8 @@ static Value JsonRaw(const json &event, const char *key) {
 }
 
 static bool IsAllDay(const json &event) {
-	return event.contains("start") && event["start"].is_object() && event["start"].contains("date") &&
-	       !event["start"].contains("dateTime");
+	return event.contains(EVENT_COL_START_AT.Name()) && event[EVENT_COL_START_AT.Name()].is_object() && event[EVENT_COL_START_AT.Name()].contains("date") &&
+	       !event[EVENT_COL_START_AT.Name()].contains("dateTime");
 }
 
 static Value ParseEventTime(const json &event, const char *which) {
@@ -266,37 +267,37 @@ static Value ParseEventTime(const json &event, const char *which) {
 }
 
 static Value ExtractField(const json &event, const string &field) {
-	if (field == "id") {
-		return JsonString(event, "id");
+	if (field == EVENT_COL_ID.Name()) {
+		return JsonString(event, EVENT_COL_ID.Name());
 	}
-	if (field == "summary") {
-		return JsonString(event, "summary");
+	if (field == EVENT_COL_SUMMARY.Name()) {
+		return JsonString(event, EVENT_COL_SUMMARY.Name());
 	}
-	if (field == "description") {
-		return JsonString(event, "description");
+	if (field == EVENT_COL_DESCRIPTION.Name()) {
+		return JsonString(event, EVENT_COL_DESCRIPTION.Name());
 	}
-	if (field == "location") {
-		return JsonString(event, "location");
+	if (field == EVENT_COL_LOCATION.Name()) {
+		return JsonString(event, EVENT_COL_LOCATION.Name());
 	}
-	if (field == "status") {
-		return JsonString(event, "status");
+	if (field == EVENT_COL_STATUS.Name()) {
+		return JsonString(event, EVENT_COL_STATUS.Name());
 	}
-	if (field == "html_link") {
+	if (field == EVENT_COL_HTML_URL.Name()) {
 		return JsonString(event, "htmlLink");
 	}
-	if (field == "created") {
-		return JsonString(event, "created");
+	if (field == EVENT_COL_CREATED_AT.Name()) {
+		return JsonString(event, EVENT_COL_CREATED_AT.Name());
 	}
-	if (field == "updated") {
-		return JsonString(event, "updated");
+	if (field == EVENT_COL_UPDATED_AT.Name()) {
+		return JsonString(event, EVENT_COL_UPDATED_AT.Name());
 	}
-	if (field == "start") {
-		return ParseEventTime(event, "start");
+	if (field == EVENT_COL_START_AT.Name()) {
+		return ParseEventTime(event, EVENT_COL_START_AT.Name());
 	}
-	if (field == "end") {
-		return ParseEventTime(event, "end");
+	if (field == EVENT_COL_END_AT.Name()) {
+		return ParseEventTime(event, EVENT_COL_END_AT.Name());
 	}
-	if (field == "all_day") {
+	if (field == EVENT_COL_ALL_DAY.Name()) {
 		return Value::BOOLEAN(IsAllDay(event));
 	}
 	if (field == "attendees") {
@@ -360,7 +361,7 @@ static void CalendarScan(ClientContext &context, TableFunctionInput &data_p, Dat
 		for (idx_t col = 0; col < output.ColumnCount(); col++) {
 			column_t cid = gstate.column_ids[col];
 			if (cid == COLUMN_IDENTIFIER_ROW_ID) {
-				output.SetValue(col, out_idx, JsonString(event, "id"));
+				output.SetValue(col, out_idx, JsonString(event, EVENT_COL_ID.Name()));
 			} else {
 				output.SetValue(col, out_idx, ExtractField(event, bind_data.names[cid]));
 			}

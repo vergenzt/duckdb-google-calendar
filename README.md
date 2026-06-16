@@ -1,36 +1,48 @@
 # duckdb-google-calendar
 
-A DuckDB extension that exposes Google Calendar as an attachable, read/write catalog
-(`ATTACH ... (TYPE google_calendar)`), with one `events` table per calendar.
+A DuckDB extension to read/write Google Calendar events using DuckDB SQL.
 
-## Build
+## Usage
 
-    make          # builds the extension + a duckdb shell with it preloaded
-    make test     # runs test/sql/*.test (live tests need credentials; see below)
+1. **Authenticate:**
 
-## Authenticate
+   ```sql
+   CREATE SECRET my_gcal_secret (
+     	TYPE google_calendar,
+     	/* Choose auth method: */
+       /* 1. service account creds on disk */
+       PROVIDER key_file, PATH '/path/to/sa.json' /* or... */
+       /* 2. service account creds JSON in env var (e.g. $MY_SA_JSON_ENV_VAR) */
+       PROVIDER key_file, KEY_ENV 'MY_SA_JSON_ENV_VAR' /* or... */
+     	/* 3. pre-authenticated access token */
+       PROVIDER access_token, TOKEN '...' /* or... */
+       /* 4. interactive oauth (requires $GOOGLE_CALENDAR_OAUTH_CLIENT_ID in env) */
+       PROVIDER oauth
+   );
+   ```
 
-Create a `google_calendar` secret (one of three providers):
+2. **Attach:**
 
-    -- Service account (recommended for automation)
-    CREATE SECRET cal (TYPE google_calendar, PROVIDER key_file, filepath '/path/sa.json');
+   ```sql
+   ATTACH 'my_calendar' (TYPE google_calendar, SECRET 'my_gcal_secret');
+   ```
 
-    -- ...or supply the key JSON via an env var (nothing on disk; name only in SQL):
-    --   export GCAL_SA_KEY="$(cat sa.json)"   # e.g. via `op run` or a CI secret
-    CREATE SECRET cal (TYPE google_calendar, PROVIDER key_file, key_env 'GCAL_SA_KEY');
+3. **Access:**
 
-    -- Pre-obtained OAuth access token
-    CREATE SECRET cal (TYPE google_calendar, PROVIDER access_token, token '...');
+   ```sql
+   SHOW TABLES FROM my_calendar;
+   /* ... */
+   
+   SELECT id, summary, start_time, end_time, 
+   ```
 
-    -- Interactive OAuth (requires a registered app):
-    --   export GOOGLE_CALENDAR_OAUTH_CLIENT_ID=...   # optional: GOOGLE_CALENDAR_OAUTH_REDIRECT_URI
-    CREATE SECRET cal (TYPE google_calendar, PROVIDER oauth);
+   
 
 ## Attach & query
 
     ATTACH 'me' AS cal (TYPE google_calendar, SECRET cal);
-    SHOW TABLES FROM cal;   -- one table per calendar (the primary calendar is cal.primary)
-
+       -- one table per calendar (the primary calendar is cal.primary)
+    
     -- Reads REQUIRE an explicit time bound on `start`:
     SELECT id, summary, start, "end"
     FROM cal.primary
@@ -40,10 +52,10 @@ Create a `google_calendar` secret (one of three providers):
 
     INSERT INTO cal.primary (summary, start, "end")
     VALUES ('Standup', TIMESTAMPTZ '2026-06-10 09:00-04', TIMESTAMPTZ '2026-06-10 09:15-04');
-
+    
     UPDATE cal.primary SET location = 'Room 4' WHERE id = 'abc123';
     DELETE FROM cal.primary WHERE id = 'abc123';
-
+    
     MERGE INTO cal.primary AS t USING staging AS s ON t.id = s.id
       WHEN MATCHED THEN UPDATE SET summary = s.summary
       WHEN NOT MATCHED THEN INSERT (summary, start, "end") VALUES (s.summary, s.start, s."end");
@@ -59,3 +71,9 @@ Create a `google_calendar` secret (one of three providers):
 - `RETURNING` is not supported; writes are serialized; transient 429/5xx are retried with backoff.
 - Credential-free mock-backed sqllogictests are deferred to v2; `test/sql/live.test` exercises the
   live API when `GOOGLE_CALENDAR_ACCESS_TOKEN` is set.
+
+## Contributing
+
+1. `git clone --recursive vergenzt/duckdb-google-calendar && cd duckdb-google-calendar`
+2. Compile the project with `make release` (or just `make`; it's the default).
+3. Run tests with `make test`.

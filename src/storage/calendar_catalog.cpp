@@ -92,7 +92,9 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 			used_names.insert(table_name);
 
 			CreateTableInfo info(*main_schema, table_name);
-			AddEventsColumns(info.columns);
+			for (auto col : EVENT_COLS) {
+				info.columns.AddColumn(col->Copy());
+			}
 			auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, cal.id);
 			main_schema->AddTable(std::move(entry));
 		}
