@@ -22,8 +22,13 @@ Create a `google_calendar` secret (one of three providers):
     -- Pre-obtained OAuth access token
     CREATE SECRET cal (TYPE google_calendar, PROVIDER access_token, token '...');
 
-    -- Interactive OAuth (requires a registered app):
-    --   export GOOGLE_CALENDAR_OAUTH_CLIENT_ID=...   # optional: GOOGLE_CALENDAR_OAUTH_REDIRECT_URI
+    -- Interactive OAuth (loopback auth-code + PKCE; requires a registered
+    -- "Desktop app" OAuth client). Opens a browser, captures the redirect on a
+    -- local 127.0.0.1 listener, and exchanges the code for a token:
+    --   export GOOGLE_CALENDAR_OAUTH_CLIENT_ID=...
+    --   export GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET=...   # Desktop-app clients
+    --   # optional: GOOGLE_CALENDAR_OAUTH_REDIRECT_URI=http://127.0.0.1:8085
+    --   #           (pin a fixed loopback port; default is an ephemeral port)
     CREATE SECRET cal (TYPE google_calendar, PROVIDER oauth);
 
 ## Attach & query

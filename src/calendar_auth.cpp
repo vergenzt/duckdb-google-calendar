@@ -3,12 +3,25 @@
 #include <iostream>
 #include <iterator>
 #include <random>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
+#include <cctype>
+#include <cstdio>
 #include "json.hpp"
+
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#include "httplib.hpp"
+#include <openssl/sha.h>
+#include <openssl/rand.h>
 
 #include "duckdb/common/exception/binder_exception.hpp"
 
 #include "calendar_auth.hpp"
+#include "calendar/util/encoding.hpp"
 #include "calendar/util/options.hpp"
+#include "calendar/util/query.hpp"
 
 using json = nlohmann::json;
 
@@ -28,6 +41,22 @@ static std::string GenerateRandomString(size_t length) {
 	return result;
 }
 
+// Generate a PKCE code verifier (RFC 7636): a high-entropy URL-safe string.
+static std::string GeneratePkceVerifier() {
+	unsigned char buf[32];
+	if (RAND_bytes(buf, sizeof(buf)) != 1) {
+		throw IOException("Failed to generate PKCE code verifier (RAND_bytes failed)");
+	}
+	return duckdb::gcal::Base64UrlEncode(buf, sizeof(buf));
+}
+
+// Derive the S256 code challenge from a PKCE verifier: base64url(SHA256(verifier)).
+static std::string PkceChallengeS256(const std::string &verifier) {
+	unsigned char digest[SHA256_DIGEST_LENGTH];
+	SHA256(reinterpret_cast<const unsigned char *>(verifier.data()), verifier.size(), digest);
+	return duckdb::gcal::Base64UrlEncode(digest, sizeof(digest));
+}
+
 static void CopySecret(const std::string &key, const CreateSecretInput &input, KeyValueSecret &result) {
 	auto val = input.options.find(key);
 	if (val != input.options.end()) {
@@ -39,15 +68,10 @@ static void RegisterCommonSecretParameters(CreateSecretFunction &function) {
 	function.named_parameters["token"] = LogicalType::VARCHAR;
 }
 
-static void RedactCommonKeys(KeyValueSecret &result) {
-	result.redact_keys.insert("proxy_password");
-}
-
 static unique_ptr<BaseSecret> CreateSecretFromAccessToken(ClientContext &context, CreateSecretInput &input) {
 	auto scope = input.scope;
 	auto result = make_uniq<KeyValueSecret>(scope, input.type, input.provider, input.name);
 	CopySecret("token", input, *result);
-	RedactCommonKeys(*result);
 	result->redact_keys.insert("token");
 	return std::move(result);
 }
@@ -57,7 +81,6 @@ static unique_ptr<BaseSecret> CreateSecretFromOAuth(ClientContext &context, Crea
 	auto result = make_uniq<KeyValueSecret>(scope, input.type, input.provider, input.name);
 	string token = InitiateOAuthFlow();
 	result->secret_map["token"] = token;
-	RedactCommonKeys(*result);
 	result->redact_keys.insert("token");
 	return std::move(result);
 }
@@ -119,7 +142,6 @@ static unique_ptr<BaseSecret> CreateSecretFromKeyFile(ClientContext &context, Cr
 	(*result).secret_map["secret"] = Value(secret);
 	CopySecret("filepath", input, *result); // Store the filepath anyway
 
-	RedactCommonKeys(*result);
 	result->redact_keys.insert("secret");
 	result->redact_keys.insert("filepath");
 	result->redact_keys.insert("token");
@@ -136,11 +158,9 @@ void CreateGoogleCalendarSecretFunctions::Register(ExtensionLoader &loader) {
 	secret_type.default_provider = "oauth";
 
 	CreateSecretFunction access_token_function = {type, "access_token", CreateSecretFromAccessToken, {}};
-	access_token_function.named_parameters["access_token"] = LogicalType::VARCHAR;
 	RegisterCommonSecretParameters(access_token_function);
 
 	CreateSecretFunction oauth_function = {type, "oauth", CreateSecretFromOAuth, {}};
-	oauth_function.named_parameters["use_oauth"] = LogicalType::BOOLEAN;
 	RegisterCommonSecretParameters(oauth_function);
 
 	CreateSecretFunction key_file_function = {type, "key_file", CreateSecretFromKeyFile, {}};
@@ -156,47 +176,201 @@ void CreateGoogleCalendarSecretFunctions::Register(ExtensionLoader &loader) {
 	loader.RegisterFunction(key_file_function);
 }
 
+// Best-effort launch of the system browser at `url`. Returns false on platforms
+// where no display is available (e.g. headless Linux), so the caller can fall
+// back to printing the URL for manual copy/paste.
+static bool OpenInBrowser(const std::string &url) {
+#ifdef __linux__
+	const char *display = std::getenv("DISPLAY");
+	const char *wayland_display = std::getenv("WAYLAND_DISPLAY");
+	if (!display && !wayland_display) {
+		return false;
+	}
+#endif
+#ifdef _WIN32
+	system(("start \"\" \"" + url + "\"").c_str());
+#elif __APPLE__
+	system(("open \"" + url + "\"").c_str());
+#elif __linux__
+	system(("xdg-open \"" + url + "\"").c_str());
+#endif
+	return true;
+}
+
+// If GOOGLE_CALENDAR_OAUTH_REDIRECT_URI names a fixed loopback port
+// (e.g. http://127.0.0.1:8085), return that port so we bind the local listener
+// to it. Returns 0 to request an ephemeral port (the default; Google "Desktop"
+// OAuth clients accept any loopback port without prior registration).
+static int DesiredLoopbackPort() {
+	const char *redirect_env = std::getenv("GOOGLE_CALENDAR_OAUTH_REDIRECT_URI");
+	if (!redirect_env || !*redirect_env) {
+		return 0;
+	}
+	const std::string uri = redirect_env;
+	size_t host_pos = uri.find("://");
+	if (host_pos == std::string::npos) {
+		return 0;
+	}
+	size_t colon = uri.find(':', host_pos + 3);
+	if (colon == std::string::npos) {
+		return 0;
+	}
+	size_t end = colon + 1;
+	while (end < uri.size() && std::isdigit(static_cast<unsigned char>(uri[end]))) {
+		end++;
+	}
+	if (end == colon + 1) {
+		return 0;
+	}
+	try {
+		return std::stoi(uri.substr(colon + 1, end - colon - 1));
+	} catch (...) {
+		return 0;
+	}
+}
+
+// OAuth 2.0 authorization-code flow with PKCE for installed/desktop apps
+// (https://developers.google.com/identity/protocols/oauth2/native-app).
+// Replaces the deprecated OOB flow: we open the consent screen, capture the
+// authorization code on a loopback HTTP listener, then exchange it (with the
+// PKCE verifier) for an access token at the token endpoint.
 std::string InitiateOAuthFlow() {
 	const char *client_id_env = std::getenv("GOOGLE_CALENDAR_OAUTH_CLIENT_ID");
 	if (!client_id_env || !*client_id_env) {
 		throw BinderException(
 		    "The 'oauth' provider requires a registered Google OAuth client. Set GOOGLE_CALENDAR_OAUTH_CLIENT_ID "
-		    "(and optionally GOOGLE_CALENDAR_OAUTH_REDIRECT_URI), or use the 'key_file' / 'access_token' provider.");
+		    "(and GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET for Desktop-app clients), or use the 'key_file' / "
+		    "'access_token' provider.");
 	}
-	const char *redirect_env = std::getenv("GOOGLE_CALENDAR_OAUTH_REDIRECT_URI");
 	const std::string client_id = client_id_env;
-	const std::string redirect_uri = (redirect_env && *redirect_env) ? redirect_env : "urn:ietf:wg:oauth:2.0:oob";
-	const std::string auth_url = "https://accounts.google.com/o/oauth2/v2/auth";
+	const char *client_secret_env = std::getenv("GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET");
+	const std::string client_secret = (client_secret_env && *client_secret_env) ? client_secret_env : "";
 
-	std::string state = GenerateRandomString(10);
-	std::string auth_request_url = auth_url + "?client_id=" + client_id + "&redirect_uri=" + redirect_uri +
-	                               "&response_type=token" + "&scope=https://www.googleapis.com/auth/calendar" +
-	                               "&state=" + state;
+	// PKCE parameters and CSRF state.
+	const std::string code_verifier = GeneratePkceVerifier();
+	const std::string code_challenge = PkceChallengeS256(code_verifier);
+	const std::string state = GenerateRandomString(32);
 
-	std::cout << "Visit the below URL to authorize DuckDB Google Calendar" << '\n';
+	// Stand up a loopback listener to receive Google's redirect.
+	duckdb_httplib_openssl::Server server;
+	std::mutex mtx;
+	std::condition_variable cv;
+	bool done = false;
+	std::string captured_code;
+	std::string captured_state;
+	std::string captured_error;
+
+	server.Get("/", [&](const duckdb_httplib_openssl::Request &req, duckdb_httplib_openssl::Response &res) {
+		{
+			std::lock_guard<std::mutex> lock(mtx);
+			if (req.has_param("error")) {
+				captured_error = req.get_param_value("error");
+			}
+			if (req.has_param("code")) {
+				captured_code = req.get_param_value("code");
+			}
+			if (req.has_param("state")) {
+				captured_state = req.get_param_value("state");
+			}
+			done = true;
+		}
+		cv.notify_one();
+		const bool ok = captured_error.empty() && !captured_code.empty();
+		res.set_content(std::string("<!doctype html><html><body style=\"font-family:sans-serif\"><h2>") +
+		                    (ok ? "Authorization complete" : "Authorization failed") +
+		                    "</h2><p>You can close this tab and return to DuckDB.</p></body></html>",
+		                "text/html");
+	});
+
+	const int desired_port = DesiredLoopbackPort();
+	int port = desired_port;
+	if (desired_port != 0) {
+		if (!server.bind_to_port("127.0.0.1", desired_port)) {
+			throw IOException("Could not bind OAuth loopback listener to 127.0.0.1:" + std::to_string(desired_port) +
+			                  " (set by GOOGLE_CALENDAR_OAUTH_REDIRECT_URI)");
+		}
+	} else {
+		port = server.bind_to_any_port("127.0.0.1");
+		if (port < 0) {
+			throw IOException("Could not bind OAuth loopback listener to 127.0.0.1");
+		}
+	}
+
+	std::thread listener([&]() { server.listen_after_bind(); });
+	server.wait_until_ready();
+
+	const std::string redirect_uri = "http://127.0.0.1:" + std::to_string(port);
+	const std::string scope = "https://www.googleapis.com/auth/calendar";
+	const std::string auth_request_url =
+	    "https://accounts.google.com/o/oauth2/v2/auth?response_type=code"
+	    "&client_id=" +
+	    gcal::UrlEncode(client_id) + "&redirect_uri=" + gcal::UrlEncode(redirect_uri) + "&scope=" +
+	    gcal::UrlEncode(scope) + "&state=" + gcal::UrlEncode(state) + "&code_challenge=" + gcal::UrlEncode(code_challenge) +
+	    "&code_challenge_method=S256&access_type=offline&prompt=consent";
+
+	std::cout << "Visit the below URL to authorize DuckDB Google Calendar\n";
 	std::cout << auth_request_url << '\n';
+	OpenInBrowser(auth_request_url);
+	std::cout << "Waiting for authorization in your browser...\n";
 
-	bool should_open_browser = true;
-#ifdef __linux__
-	const char *display = std::getenv("DISPLAY");
-	const char *wayland_display = std::getenv("WAYLAND_DISPLAY");
-	if (!display && !wayland_display) {
-		should_open_browser = false;
+	// Wait for the redirect (with a timeout so a stuck flow doesn't hang DuckDB).
+	{
+		std::unique_lock<std::mutex> lock(mtx);
+		if (!cv.wait_for(lock, std::chrono::seconds(300), [&]() { return done; })) {
+			server.stop();
+			if (listener.joinable()) {
+				listener.join();
+			}
+			throw IOException("Timed out waiting for Google OAuth authorization (no redirect received in 5 minutes)");
+		}
 	}
-#endif
-	if (should_open_browser) {
-#ifdef _WIN32
-		system(("start \"\" \"" + auth_request_url + "\"").c_str());
-#elif __APPLE__
-		system(("open \"" + auth_request_url + "\"").c_str());
-#elif __linux__
-		system(("xdg-open \"" + auth_request_url + "\"").c_str());
-#endif
+	server.stop();
+	if (listener.joinable()) {
+		listener.join();
 	}
-	std::cout << "After granting permission, enter the token: ";
-	std::string access_token;
-	std::cin >> access_token;
-	return access_token;
+
+	if (!captured_error.empty()) {
+		throw IOException("Google OAuth authorization failed: " + captured_error);
+	}
+	if (captured_state != state) {
+		throw IOException("Google OAuth state mismatch (possible CSRF); aborting.");
+	}
+	if (captured_code.empty()) {
+		throw IOException("Google OAuth authorization did not return a code.");
+	}
+
+	// Exchange the authorization code for an access token.
+	duckdb_httplib_openssl::Client token_client("https://oauth2.googleapis.com");
+	duckdb_httplib_openssl::Params params;
+	params.emplace("code", captured_code);
+	params.emplace("client_id", client_id);
+	if (!client_secret.empty()) {
+		params.emplace("client_secret", client_secret);
+	}
+	params.emplace("code_verifier", code_verifier);
+	params.emplace("grant_type", "authorization_code");
+	params.emplace("redirect_uri", redirect_uri);
+
+	auto result = token_client.Post("/token", params);
+	if (!result) {
+		throw IOException("OAuth token exchange request failed: " +
+		                  duckdb_httplib_openssl::to_string(result.error()));
+	}
+	if (result->status != 200) {
+		throw IOException("OAuth token exchange failed (HTTP " + std::to_string(result->status) + "): " +
+		                  result->body);
+	}
+
+	json token_response;
+	try {
+		token_response = json::parse(result->body);
+	} catch (const std::exception &e) {
+		throw IOException(std::string("Could not parse OAuth token response: ") + e.what());
+	}
+	if (!token_response.contains("access_token")) {
+		throw IOException("OAuth token response did not contain an access_token: " + result->body);
+	}
+	return token_response["access_token"].get<std::string>();
 }
 
 } // namespace duckdb

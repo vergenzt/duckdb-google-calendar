@@ -5,7 +5,6 @@ namespace duckdb {
 namespace gcal {
 
 HttpResponse MockHttpClient::Execute(const HttpRequest &request) {
-	recordedRequests.push_back(request);
 	if (responseIndex < responses.size()) {
 		return responses[responseIndex++];
 	}
@@ -14,10 +13,6 @@ HttpResponse MockHttpClient::Execute(const HttpRequest &request) {
 
 void MockHttpClient::AddResponse(HttpResponse response) {
 	responses.push_back(std::move(response));
-}
-
-const std::vector<HttpRequest> &MockHttpClient::GetRecordedRequests() const {
-	return recordedRequests;
 }
 } // namespace gcal
 } // namespace duckdb

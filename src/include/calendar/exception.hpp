@@ -35,18 +35,5 @@ public:
 	explicit CalendarParseException(const std::string &message) : CalendarException(message) {
 	}
 };
-
-class CalendarNotFoundException : public CalendarException {
-public:
-	explicit CalendarNotFoundException(const std::string &identifier)
-	    : CalendarException("Calendar resource not found: " + identifier), identifier(identifier) {
-	}
-	const std::string &GetIdentifier() const {
-		return identifier;
-	}
-
-private:
-	std::string identifier;
-};
 } // namespace gcal
 } // namespace duckdb
