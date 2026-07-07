@@ -2,6 +2,8 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/types/interval.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 
 namespace duckdb {
 class CalendarSchemaEntry;
@@ -17,6 +19,18 @@ public:
 
 	// Builds per-calendar tables via the Calendar API (enumeration body lands in Slice 6).
 	void LoadCatalog(ClientContext &context);
+
+	// Optional default time window, set via ATTACH with any two of {default_window_start,
+	// default_window_end, default_window_length}, or default_window_length alone. When set, a scan
+	// with no explicit `start` bound uses this window instead of erroring — which is what makes
+	// MERGE and unqualified UPDATE/DELETE reachable (their target scan carries no `start` filter).
+	// Two modes:
+	//   dynamic (length alone): [now - length/2, now + length/2], recomputed per query.
+	//   static  (a fixed pair): the absolute [default_window_start, default_window_end] resolved here.
+	bool has_default_window = false;
+	bool default_is_dynamic = false;
+	interval_t default_window_length {};                           // dynamic: full width of the window
+	timestamp_tz_t default_window_start {}, default_window_end {}; // static: absolute bounds
 
 	void Initialize(bool load_builtin) override;
 	string GetCatalogType() override {

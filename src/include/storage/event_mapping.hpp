@@ -70,6 +70,7 @@ inline nlohmann::json RowToEvent(DataChunk &chunk, idx_t row) {
 			event[key] = v.ToString();
 		}
 	};
+	set_str("id", 0); // client-supplied id (base32hex, len 5-1024); omitted → Google mints one
 	set_str("summary", 1);
 	set_str("description", 2);
 	set_str("location", 3);

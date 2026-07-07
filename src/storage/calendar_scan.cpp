@@ -1,5 +1,6 @@
 #include "storage/calendar_scan.hpp"
 #include "storage/calendar_transaction.hpp"
+#include "storage/calendar_catalog.hpp"
 
 #include "json.hpp"
 
@@ -317,21 +318,49 @@ static Value ExtractField(const json &event, const string &field) {
 static unique_ptr<GlobalTableFunctionState> CalendarScanInitGlobal(ClientContext &context,
                                                                    TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<CalendarScanBindData>();
-	if (!bind_data.has_lower && !bind_data.has_upper) {
-		throw BinderException(
-		    "google_calendar scan requires an explicit time bound on \"start\" (e.g. "
-		    "WHERE start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00')");
+
+	// Effective bounds: the explicit filter bounds if present, else the catalog's rolling
+	// default_window (which is what makes MERGE and unqualified UPDATE/DELETE reachable — their
+	// target scan carries no `start` filter to bound the API call).
+	bool has_lower = bind_data.has_lower;
+	bool has_upper = bind_data.has_upper;
+	string time_min = bind_data.time_min;
+	string time_max = bind_data.time_max;
+	if (!has_lower && !has_upper) {
+		auto &cat = bind_data.catalog.Cast<CalendarCatalog>();
+		if (!cat.has_default_window) {
+			throw BinderException(
+			    "google_calendar scan requires an explicit time bound on \"start\" (e.g. "
+			    "WHERE start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00'), "
+			    "or ATTACH with default_window_length / default_window_start / default_window_end to enable a "
+			    "default window");
+		}
+		timestamp_tz_t lo, hi;
+		if (cat.default_is_dynamic) {
+			// length/2 each side of "now". Halving in micros (months approximated) is fine — the
+			// FormatWithBuffer ±1-day pad already fuzzes the edges.
+			auto now = Timestamp::GetCurrentTimestamp();
+			int64_t half = Interval::GetMicro(cat.default_window_length) / 2;
+			lo = timestamp_tz_t(now.value - half);
+			hi = timestamp_tz_t(now.value + half);
+		} else {
+			lo = cat.default_window_start;
+			hi = cat.default_window_end;
+		}
+		time_min = FormatWithBuffer(Value::TIMESTAMPTZ(lo), -ONE_DAY_MICROS);
+		time_max = FormatWithBuffer(Value::TIMESTAMPTZ(hi), ONE_DAY_MICROS);
+		has_lower = has_upper = true;
 	}
 	auto state = make_uniq<CalendarScanGlobalState>();
 	state->column_ids = input.column_ids;
 
 	gcal::QueryBuilder qb;
 	qb.Add("singleEvents", "true").Add("orderBy", "startTime").Add("maxResults", "2500");
-	if (bind_data.has_lower) {
-		qb.Add("timeMin", bind_data.time_min);
+	if (has_lower) {
+		qb.Add("timeMin", time_min);
 	}
-	if (bind_data.has_upper) {
-		qb.Add("timeMax", bind_data.time_max);
+	if (has_upper) {
+		qb.Add("timeMax", time_max);
 	}
 	state->base_query = qb.Build();
 
