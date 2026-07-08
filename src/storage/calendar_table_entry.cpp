@@ -22,7 +22,7 @@ TableFunction CalendarTableEntry::GetScanFunction(ClientContext &context, unique
 		names.push_back(col.Name());
 		types.push_back(col.Type());
 	}
-	bind_data = MakeCalendarScanBindData(ParentCatalog(), calendar_id, std::move(names), std::move(types));
+	bind_data = MakeCalendarScanBindData(ParentCatalog(), *this, calendar_id, std::move(names), std::move(types));
 	return GetCalendarScanFunction();
 }
 

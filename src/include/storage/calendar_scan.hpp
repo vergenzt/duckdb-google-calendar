@@ -7,7 +7,7 @@ namespace duckdb {
 
 TableFunction GetCalendarScanFunction();
 
-unique_ptr<FunctionData> MakeCalendarScanBindData(Catalog &catalog, string calendar_id, vector<string> names,
-                                                  vector<LogicalType> types);
+unique_ptr<FunctionData> MakeCalendarScanBindData(Catalog &catalog, TableCatalogEntry &table, string calendar_id,
+                                                  vector<string> names, vector<LogicalType> types);
 
 } // namespace duckdb

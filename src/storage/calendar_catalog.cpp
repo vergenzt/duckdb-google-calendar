@@ -27,8 +27,6 @@
 #include "calendar/transport/client_factory.hpp"
 #include "calendar/auth_factory.hpp"
 
-#include <cctype>
-
 namespace duckdb {
 
 CalendarCatalog::CalendarCatalog(AttachedDatabase &db, string path, string secret_name)
@@ -44,29 +42,6 @@ void CalendarCatalog::Initialize(bool load_builtin) {
 	// Schema container is built in the constructor; per-calendar tables are added by LoadCatalog.
 }
 
-static string SlugifyName(const string &summary, const string &id) {
-	const string &base = summary.empty() ? id : summary;
-	string result;
-	for (char ch : base) {
-		auto c = static_cast<unsigned char>(ch);
-		if (std::isalnum(c)) {
-			result += static_cast<char>(std::tolower(c));
-		} else if (ch == ' ' || ch == '-' || ch == '_') {
-			result += '_';
-		}
-	}
-	while (!result.empty() && result.front() == '_') {
-		result.erase(result.begin());
-	}
-	while (!result.empty() && result.back() == '_') {
-		result.pop_back();
-	}
-	if (result.empty()) {
-		result = "calendar";
-	}
-	return result;
-}
-
 void CalendarCatalog::LoadCatalog(ClientContext &context) {
 	auto http = gcal::CreateHttpClient(context);
 	auto auth = gcal::CreateAuthFromSecret(context, *http, secret_name);
@@ -77,21 +52,12 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 	}
 	gcal::GoogleCalendarClient client(*http, *auth);
 
-	case_insensitive_set_t used_names;
 	string page_token;
 	do {
 		auto response = client.CalendarList().List(page_token);
 		for (auto &cal : response.items) {
-			// The primary calendar is always exposed as cal.primary (Slice 10 cascade).
-			string base = cal.primary ? "primary" : SlugifyName(cal.summary, cal.id);
-			string table_name = base;
-			idx_t suffix = 2;
-			while (used_names.find(table_name) != used_names.end()) {
-				table_name = base + "_" + std::to_string(suffix++);
-			}
-			used_names.insert(table_name);
-
-			CreateTableInfo info(*main_schema, table_name);
+			// Calendar IDs are globally unique, so they serve directly as table names.
+			CreateTableInfo info(*main_schema, cal.id);
 			AddEventsColumns(info.columns);
 			auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, cal.id);
 			main_schema->AddTable(std::move(entry));

@@ -27,10 +27,13 @@ namespace duckdb {
 static constexpr int64_t ONE_DAY_MICROS = 86400000000LL;
 
 struct CalendarScanBindData : public TableFunctionData {
-	CalendarScanBindData(Catalog &catalog, string calendar_id, vector<string> names, vector<LogicalType> types)
-	    : catalog(catalog), calendar_id(std::move(calendar_id)), names(std::move(names)), types(std::move(types)) {
+	CalendarScanBindData(Catalog &catalog, TableCatalogEntry &table, string calendar_id, vector<string> names,
+	                     vector<LogicalType> types)
+	    : catalog(catalog), table(table), calendar_id(std::move(calendar_id)), names(std::move(names)),
+	      types(std::move(types)) {
 	}
 	Catalog &catalog;
+	TableCatalogEntry &table; // target for MERGE/UPDATE/DELETE binding (LogicalGet::GetTable)
 	string calendar_id;
 	vector<string> names;
 	vector<LogicalType> types;
@@ -55,9 +58,9 @@ struct CalendarScanGlobalState : public GlobalTableFunctionState {
 	}
 };
 
-unique_ptr<FunctionData> MakeCalendarScanBindData(Catalog &catalog, string calendar_id, vector<string> names,
-                                                  vector<LogicalType> types) {
-	return make_uniq<CalendarScanBindData>(catalog, std::move(calendar_id), std::move(names), std::move(types));
+unique_ptr<FunctionData> MakeCalendarScanBindData(Catalog &catalog, TableCatalogEntry &table, string calendar_id,
+                                                  vector<string> names, vector<LogicalType> types) {
+	return make_uniq<CalendarScanBindData>(catalog, table, std::move(calendar_id), std::move(names), std::move(types));
 }
 
 // ---------- filter -> timeMin/timeMax extraction ----------
@@ -399,10 +402,17 @@ static void CalendarScan(ClientContext &context, TableFunctionInput &data_p, Dat
 	output.SetCardinality(out_idx);
 }
 
+// Lets the binder resolve the scan's target table (LogicalGet::GetTable), which MERGE INTO and
+// unqualified UPDATE/DELETE require — without it the binder throws "Can only merge into base tables!".
+static BindInfo CalendarScanGetBindInfo(const optional_ptr<FunctionData> bind_data_p) {
+	return BindInfo(bind_data_p->Cast<CalendarScanBindData>().table);
+}
+
 TableFunction GetCalendarScanFunction() {
 	TableFunction function("google_calendar_scan", {}, CalendarScan, nullptr, CalendarScanInitGlobal);
 	function.pushdown_complex_filter = CalendarComplexFilter;
 	function.projection_pushdown = true;
+	function.get_bind_info = CalendarScanGetBindInfo;
 	return function;
 }
 
