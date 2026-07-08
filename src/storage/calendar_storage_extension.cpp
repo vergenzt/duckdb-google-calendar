@@ -22,6 +22,20 @@ static unique_ptr<Catalog> CalendarAttach(optional_ptr<StorageExtensionInfo> sto
 
 	auto catalog = make_uniq<CalendarCatalog>(db, info.path, secret_name);
 
+	// Optional calendar_aliases: MAP(VARCHAR, VARCHAR) of calendar ID -> mounted table name.
+	auto alias_it = info.options.find("calendar_aliases");
+	if (alias_it != info.options.end()) {
+		auto &v = alias_it->second;
+		if (v.type().id() != LogicalTypeId::MAP || MapType::KeyType(v.type()).id() != LogicalTypeId::VARCHAR ||
+		    MapType::ValueType(v.type()).id() != LogicalTypeId::VARCHAR) {
+			throw BinderException("calendar_aliases must be a MAP(VARCHAR, VARCHAR) of calendar ID -> table name");
+		}
+		for (auto &entry : ListValue::GetChildren(v)) {
+			auto &kv = StructValue::GetChildren(entry);
+			catalog->calendar_aliases[StringValue::Get(kv[0])] = StringValue::Get(kv[1]);
+		}
+	}
+
 	// Optional default window that lets an unbounded scan (and thus MERGE / unqualified
 	// UPDATE/DELETE) fall back to a time range instead of erroring. Configure with any two of
 	// {default_window_start, default_window_end, default_window_length}, or length alone:

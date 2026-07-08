@@ -56,8 +56,11 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 	do {
 		auto response = client.CalendarList().List(page_token);
 		for (auto &cal : response.items) {
-			// Calendar IDs are globally unique, so they serve directly as table names.
-			CreateTableInfo info(*main_schema, cal.id);
+			// Calendar IDs are globally unique, so they serve directly as table names, unless an
+			// alias was supplied at ATTACH, in which case the calendar is mounted only under it.
+			auto alias = calendar_aliases.find(cal.id);
+			auto table_name = alias != calendar_aliases.end() ? alias->second : cal.id;
+			CreateTableInfo info(*main_schema, table_name);
 			AddEventsColumns(info.columns);
 			auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, cal.id);
 			main_schema->AddTable(std::move(entry));

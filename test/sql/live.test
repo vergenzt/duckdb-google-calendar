@@ -27,3 +27,21 @@ statement error
 SELECT * FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}";
 ----
 explicit time bound
+
+# calendar_aliases mounts the primary calendar under its alias only.
+statement ok
+ATTACH 'primary' AS aliased (TYPE google_calendar, SECRET gcal_live,
+    calendar_aliases MAP {'${GOOGLE_CALENDAR_PRIMARY_ID}': 'mine'});
+
+query I
+SELECT count(*) >= 0 FROM aliased.mine
+WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00';
+----
+true
+
+# The ID-named table is gone once aliased.
+statement error
+SELECT * FROM aliased."${GOOGLE_CALENDAR_PRIMARY_ID}"
+WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00';
+----
+does not exist
