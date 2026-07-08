@@ -28,6 +28,33 @@ SELECT * FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}";
 ----
 explicit time bound
 
+# The extended fields (visibility, transparency, and friends) are selectable and correctly typed.
+query I
+SELECT count(*) >= 0 FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}"
+WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00'
+  AND (visibility IS NULL OR typeof(visibility) = 'VARCHAR')
+  AND (transparency IS NULL OR typeof(transparency) = 'VARCHAR')
+  AND (locked IS NULL OR typeof(locked) = 'BOOLEAN')
+  AND (sequence IS NULL OR typeof(sequence) = 'BIGINT');
+----
+true
+
+# calendar_id is a hidden virtual column: selectable by name, and equal to the calendar's ID for
+# every row (count of mismatches is 0, which also holds when the window has no events).
+query I
+SELECT count(*) FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}"
+WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00'
+  AND calendar_id <> '${GOOGLE_CALENDAR_PRIMARY_ID}';
+----
+0
+
+# ... but excluded from SELECT * (no calendar_id column in the result).
+statement error
+SELECT calendar_id FROM (SELECT * FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}"
+WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00');
+----
+calendar_id
+
 # calendar_aliases mounts the primary calendar under its alias only.
 statement ok
 ATTACH 'primary' AS aliased (TYPE google_calendar, SECRET gcal_live,

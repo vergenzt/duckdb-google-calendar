@@ -17,6 +17,7 @@ class CalendarInsertGlobalSinkState : public GlobalSinkState {
 public:
 	gcal::GoogleCalendarClient *client = nullptr;
 	string calendar_id;
+	vector<string> names; // chunk column index -> schema column name
 	idx_t insert_count = 0;
 };
 
@@ -25,6 +26,9 @@ unique_ptr<GlobalSinkState> CalendarInsert::GetGlobalSinkState(ClientContext &co
 	auto &transaction = CalendarTransaction::Get(context, table.ParentCatalog());
 	state->client = &transaction.GetClient(context);
 	state->calendar_id = table.GetCalendarId();
+	for (auto &col : table.GetColumns().Logical()) {
+		state->names.push_back(col.Name());
+	}
 	return std::move(state);
 }
 
@@ -32,7 +36,7 @@ SinkResultType CalendarInsert::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &gstate = input.global_state.Cast<CalendarInsertGlobalSinkState>();
 	chunk.Flatten();
 	for (idx_t row = 0; row < chunk.size(); row++) {
-		auto event = gcal_map::RowToEvent(chunk, row);
+		auto event = gcal_map::RowToEvent(chunk, row, gstate.names);
 		gstate.client->Events(gstate.calendar_id).Insert(event);
 		gstate.insert_count++;
 	}

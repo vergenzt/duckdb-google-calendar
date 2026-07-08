@@ -22,6 +22,7 @@ class CalendarUpdateGlobalSinkState : public GlobalSinkState {
 public:
 	gcal::GoogleCalendarClient *client = nullptr;
 	string calendar_id;
+	vector<string> names; // schema column index -> column name
 	idx_t update_count = 0;
 };
 
@@ -30,6 +31,9 @@ unique_ptr<GlobalSinkState> CalendarUpdate::GetGlobalSinkState(ClientContext &co
 	auto &transaction = CalendarTransaction::Get(context, table.ParentCatalog());
 	state->client = &transaction.GetClient(context);
 	state->calendar_id = table.GetCalendarId();
+	for (auto &col : table.GetColumns().Logical()) {
+		state->names.push_back(col.Name());
+	}
 	return std::move(state);
 }
 
@@ -48,13 +52,13 @@ SinkResultType CalendarUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 
 		bool all_day = gcal_map::ExistingAllDay(event);
 		for (idx_t c = 0; c < columns.size(); c++) {
-			if (columns[c].index == 10) {
+			if (gstate.names[columns[c].index] == "all_day") {
 				auto v = chunk.GetValue(value_indices[c], row);
 				all_day = !v.IsNull() && BooleanValue::Get(v);
 			}
 		}
 		for (idx_t c = 0; c < columns.size(); c++) {
-			gcal_map::ApplySet(event, columns[c].index, chunk.GetValue(value_indices[c], row), all_day);
+			gcal_map::ApplySet(event, gstate.names[columns[c].index], chunk.GetValue(value_indices[c], row), all_day);
 		}
 		gstate.client->Events(gstate.calendar_id).Update(id, event);
 		gstate.update_count++;

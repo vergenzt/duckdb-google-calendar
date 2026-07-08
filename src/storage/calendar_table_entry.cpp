@@ -39,6 +39,7 @@ vector<column_t> CalendarTableEntry::GetRowIdColumns() const {
 virtual_column_map_t CalendarTableEntry::GetVirtualColumns() const {
 	virtual_column_map_t virtual_columns;
 	virtual_columns.insert(make_pair(COLUMN_IDENTIFIER_ROW_ID, TableColumn("rowid", LogicalType::VARCHAR)));
+	virtual_columns.insert(make_pair(CALENDAR_ID_VIRTUAL_COLUMN, TableColumn("calendar_id", LogicalType::VARCHAR)));
 	return virtual_columns;
 }
 

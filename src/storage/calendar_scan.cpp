@@ -19,6 +19,7 @@
 #include "calendar/util/query.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 
 using json = nlohmann::json;
 
@@ -243,6 +244,20 @@ static Value JsonRaw(const json &event, const char *key) {
 	return Value(event[key].dump());
 }
 
+static Value JsonBool(const json &event, const char *key) {
+	if (!event.contains(key) || !event[key].is_boolean()) {
+		return Value(LogicalType::BOOLEAN);
+	}
+	return Value::BOOLEAN(event[key].get<bool>());
+}
+
+static Value JsonBigint(const json &event, const char *key) {
+	if (!event.contains(key) || !event[key].is_number_integer()) {
+		return Value(LogicalType::BIGINT);
+	}
+	return Value::BIGINT(event[key].get<int64_t>());
+}
+
 static bool IsAllDay(const json &event) {
 	return event.contains("start") && event["start"].is_object() && event["start"].contains("date") &&
 	       !event["start"].contains("dateTime");
@@ -270,50 +285,80 @@ static Value ParseEventTime(const json &event, const char *which) {
 }
 
 static Value ExtractField(const json &event, const string &field) {
-	if (field == "id") {
-		return JsonString(event, "id");
+	// Plain-string passthrough columns -> Google JSON key.
+	static const std::unordered_map<string, const char *> string_keys = {
+	    {"id", "id"},
+	    {"summary", "summary"},
+	    {"description", "description"},
+	    {"location", "location"},
+	    {"status", "status"},
+	    {"html_link", "htmlLink"},
+	    {"created", "created"},
+	    {"updated", "updated"},
+	    {"color_id", "colorId"},
+	    {"transparency", "transparency"},
+	    {"visibility", "visibility"},
+	    {"event_type", "eventType"},
+	    {"recurring_event_id", "recurringEventId"},
+	    {"ical_uid", "iCalUID"},
+	    {"etag", "etag"},
+	    {"kind", "kind"},
+	    {"hangout_link", "hangoutLink"},
+	};
+	// Raw-JSON passthrough columns (objects/arrays) -> Google JSON key.
+	static const std::unordered_map<string, const char *> raw_keys = {
+	    {"attendees", "attendees"},
+	    {"recurrence", "recurrence"},
+	    {"reminders", "reminders"},
+	    {"conference_data", "conferenceData"},
+	    {"creator", "creator"},
+	    {"organizer", "organizer"},
+	    {"extended_properties", "extendedProperties"},
+	    {"source", "source"},
+	    {"attachments", "attachments"},
+	    {"working_location_properties", "workingLocationProperties"},
+	    {"out_of_office_properties", "outOfOfficeProperties"},
+	    {"focus_time_properties", "focusTimeProperties"},
+	};
+	// Boolean columns -> Google JSON key.
+	static const std::unordered_map<string, const char *> bool_keys = {
+	    {"end_time_unspecified", "endTimeUnspecified"},
+	    {"attendees_omitted", "attendeesOmitted"},
+	    {"anyone_can_add_self", "anyoneCanAddSelf"},
+	    {"guests_can_invite_others", "guestsCanInviteOthers"},
+	    {"guests_can_modify", "guestsCanModify"},
+	    {"guests_can_see_other_guests", "guestsCanSeeOtherGuests"},
+	    {"private_copy", "privateCopy"},
+	    {"locked", "locked"},
+	};
+
+	auto s = string_keys.find(field);
+	if (s != string_keys.end()) {
+		return JsonString(event, s->second);
 	}
-	if (field == "summary") {
-		return JsonString(event, "summary");
+	auto r = raw_keys.find(field);
+	if (r != raw_keys.end()) {
+		return JsonRaw(event, r->second);
 	}
-	if (field == "description") {
-		return JsonString(event, "description");
+	auto b = bool_keys.find(field);
+	if (b != bool_keys.end()) {
+		return JsonBool(event, b->second);
 	}
-	if (field == "location") {
-		return JsonString(event, "location");
-	}
-	if (field == "status") {
-		return JsonString(event, "status");
-	}
-	if (field == "html_link") {
-		return JsonString(event, "htmlLink");
-	}
-	if (field == "created") {
-		return JsonString(event, "created");
-	}
-	if (field == "updated") {
-		return JsonString(event, "updated");
-	}
+	// Fields needing bespoke decoding.
 	if (field == "start") {
 		return ParseEventTime(event, "start");
 	}
 	if (field == "end") {
 		return ParseEventTime(event, "end");
 	}
+	if (field == "original_start_time") {
+		return ParseEventTime(event, "originalStartTime");
+	}
 	if (field == "all_day") {
 		return Value::BOOLEAN(IsAllDay(event));
 	}
-	if (field == "attendees") {
-		return JsonRaw(event, "attendees");
-	}
-	if (field == "recurrence") {
-		return JsonRaw(event, "recurrence");
-	}
-	if (field == "reminders") {
-		return JsonRaw(event, "reminders");
-	}
-	if (field == "conference_data") {
-		return JsonRaw(event, "conferenceData");
+	if (field == "sequence") {
+		return JsonBigint(event, "sequence");
 	}
 	return Value();
 }
@@ -393,6 +438,8 @@ static void CalendarScan(ClientContext &context, TableFunctionInput &data_p, Dat
 			column_t cid = gstate.column_ids[col];
 			if (cid == COLUMN_IDENTIFIER_ROW_ID) {
 				output.SetValue(col, out_idx, JsonString(event, "id"));
+			} else if (cid == CALENDAR_ID_VIRTUAL_COLUMN) {
+				output.SetValue(col, out_idx, Value(bind_data.calendar_id));
 			} else {
 				output.SetValue(col, out_idx, ExtractField(event, bind_data.names[cid]));
 			}
