@@ -6,6 +6,9 @@
 namespace duckdb {
 
 void AddEventsColumns(ColumnList &columns) {
+	// Owning calendar's id. Not a Google event field; populated by the scan (read-only).
+	columns.AddColumn(ColumnDefinition("calendar_id", LogicalType::VARCHAR));
+
 	// Core scalar fields.
 	columns.AddColumn(ColumnDefinition("id", LogicalType::VARCHAR));
 	columns.AddColumn(ColumnDefinition("summary", LogicalType::VARCHAR));

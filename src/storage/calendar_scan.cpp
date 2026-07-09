@@ -438,7 +438,7 @@ static void CalendarScan(ClientContext &context, TableFunctionInput &data_p, Dat
 			column_t cid = gstate.column_ids[col];
 			if (cid == COLUMN_IDENTIFIER_ROW_ID) {
 				output.SetValue(col, out_idx, JsonString(event, "id"));
-			} else if (cid == CALENDAR_ID_VIRTUAL_COLUMN) {
+			} else if (bind_data.names[cid] == "calendar_id") {
 				output.SetValue(col, out_idx, Value(bind_data.calendar_id));
 			} else {
 				output.SetValue(col, out_idx, ExtractField(event, bind_data.names[cid]));
