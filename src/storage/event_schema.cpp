@@ -2,6 +2,8 @@
 
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 
 namespace duckdb {
 
@@ -62,6 +64,27 @@ void AddEventsColumns(ColumnList &columns) {
 	columns.AddColumn(ColumnDefinition("working_location_properties", LogicalType::VARCHAR));
 	columns.AddColumn(ColumnDefinition("out_of_office_properties", LogicalType::VARCHAR));
 	columns.AddColumn(ColumnDefinition("focus_time_properties", LogicalType::VARCHAR));
+}
+
+void ValidateEventsColumns(const ColumnList &columns) {
+	ColumnList expected;
+	AddEventsColumns(expected);
+
+	if (columns.LogicalColumnCount() != expected.LogicalColumnCount()) {
+		throw BinderException(
+		    "CREATE TABLE in a google_calendar catalog must produce the events schema exactly (%llu columns), "
+		    "got %llu; try AS FROM <existing_calendar> WHERE false",
+		    expected.LogicalColumnCount(), columns.LogicalColumnCount());
+	}
+	for (idx_t i = 0; i < expected.LogicalColumnCount(); i++) {
+		auto &want = expected.GetColumn(LogicalIndex(i));
+		auto &got = columns.GetColumn(LogicalIndex(i));
+		if (!StringUtil::CIEquals(want.Name(), got.Name()) || want.Type() != got.Type()) {
+			throw BinderException("CREATE TABLE column %llu must be \"%s\" %s to match the events schema, "
+			                      "got \"%s\" %s",
+			                      i + 1, want.Name(), want.Type().ToString(), got.Name(), got.Type().ToString());
+		}
+	}
 }
 
 } // namespace duckdb

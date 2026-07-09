@@ -24,6 +24,18 @@ public:
 	// Builds per-calendar tables via the Calendar API (enumeration body lands in Slice 6).
 	void LoadCatalog(ClientContext &context);
 
+	// Calendars created via CREATE TABLE ... AS during this attachment. DROP TABLE is allowed only for
+	// these, so a session can clean up after itself but never delete pre-existing user calendars.
+	void MarkCreatedThisSession(const string &calendar_id) {
+		created_calendar_ids.insert(calendar_id);
+	}
+	bool WasCreatedThisSession(const string &calendar_id) const {
+		return created_calendar_ids.find(calendar_id) != created_calendar_ids.end();
+	}
+	void ForgetCreatedThisSession(const string &calendar_id) {
+		created_calendar_ids.erase(calendar_id);
+	}
+
 	// Optional default time window, set via ATTACH with any two of {default_window_start,
 	// default_window_end, default_window_length}, or default_window_length alone. When set, a scan
 	// with no explicit `start` bound uses this window instead of erroring — which is what makes
@@ -68,6 +80,7 @@ private:
 	string path;
 	string secret_name;
 	unique_ptr<CalendarSchemaEntry> main_schema;
+	case_insensitive_set_t created_calendar_ids;
 };
 
 } // namespace duckdb

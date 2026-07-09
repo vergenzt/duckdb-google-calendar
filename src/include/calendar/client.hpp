@@ -6,6 +6,7 @@
 
 #include "calendar/auth/auth_provider.hpp"
 #include "calendar/resources/calendar_list.hpp"
+#include "calendar/resources/calendars.hpp"
 #include "calendar/resources/events.hpp"
 #include "calendar/transport/http_client.hpp"
 #include "calendar/transport/http_type.hpp"
@@ -24,6 +25,10 @@ public:
 
 	CalendarListResource CalendarList() {
 		return CalendarListResource(http, headers, baseUrl);
+	}
+
+	CalendarsResource Calendars() {
+		return CalendarsResource(http, headers, baseUrl);
 	}
 
 	EventsResource Events(const std::string &calendarId) {

@@ -36,6 +36,7 @@ set(EXTENSION_SOURCES
     src/calendar/auth_factory.cpp
     src/calendar/resources/base.cpp
     src/calendar/resources/calendar_list.cpp
+    src/calendar/resources/calendars.cpp
     src/calendar/resources/events.cpp
     src/storage/calendar_storage_extension.cpp
     src/storage/calendar_catalog.cpp

@@ -13,6 +13,7 @@
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/storage/database_size.hpp"
+#include "duckdb/planner/operator/logical_create_table.hpp"
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
@@ -26,6 +27,8 @@
 #include "calendar/client.hpp"
 #include "calendar/transport/client_factory.hpp"
 #include "calendar/auth_factory.hpp"
+
+#include "storage/calendar_transaction.hpp"
 
 namespace duckdb {
 
@@ -103,7 +106,27 @@ void CalendarCatalog::ScanSchemas(ClientContext &context, std::function<void(Sch
 
 PhysicalOperator &CalendarCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      LogicalCreateTable &op, PhysicalOperator &plan) {
-	throw NotImplementedException("google_calendar catalog does not support CREATE TABLE AS");
+	auto &create_info = op.info->Base();
+
+	// The events schema is fixed, so the query must yield exactly those columns.
+	ValidateEventsColumns(create_info.columns);
+
+	// Create the calendar in Google (POST /calendars); the table name becomes its summary.
+	auto &transaction = CalendarTransaction::Get(context, *this);
+	auto created = transaction.GetClient(context).Calendars().Insert(create_info.table);
+
+	// Register it as a live table so it's queryable without re-ATTACH.
+	CreateTableInfo info(*main_schema, create_info.table);
+	AddEventsColumns(info.columns);
+	auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, created.id);
+	auto &table_entry = *entry;
+	main_schema->AddTable(std::move(entry));
+	MarkCreatedThisSession(created.id);
+
+	// Insert the query's rows into the new calendar (none for `... AS FROM x WHERE false`).
+	auto &insert = planner.Make<CalendarInsert>(op.types, table_entry, op.estimated_cardinality, false);
+	insert.children.push_back(plan);
+	return insert;
 }
 
 PhysicalOperator &CalendarCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
