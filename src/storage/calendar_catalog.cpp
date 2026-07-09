@@ -52,6 +52,7 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 	}
 	gcal::GoogleCalendarClient client(*http, *auth);
 
+	case_insensitive_set_t aliased_ids;
 	string page_token;
 	do {
 		auto response = client.CalendarList().List(page_token);
@@ -60,6 +61,9 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 			// alias was supplied at ATTACH, in which case the calendar is mounted only under it.
 			auto alias = calendar_aliases.find(cal.id);
 			auto table_name = alias != calendar_aliases.end() ? alias->second : cal.id;
+			if (alias != calendar_aliases.end()) {
+				aliased_ids.insert(cal.id);
+			}
 			CreateTableInfo info(*main_schema, table_name);
 			AddEventsColumns(info.columns);
 			auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, cal.id);
@@ -67,6 +71,13 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 		}
 		page_token = response.nextPageToken;
 	} while (!page_token.empty());
+
+	// Fail eagerly if an alias points at a calendar ID that doesn't exist.
+	for (auto &alias : calendar_aliases) {
+		if (aliased_ids.find(alias.first) == aliased_ids.end()) {
+			throw InvalidInputException("calendar_aliases refers to unknown calendar ID \"%s\"", alias.first);
+		}
+	}
 }
 
 optional_ptr<CatalogEntry> CalendarCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
