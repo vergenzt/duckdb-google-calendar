@@ -8,9 +8,9 @@
 namespace duckdb {
 
 CalendarInsert::CalendarInsert(PhysicalPlan &physical_plan, vector<LogicalType> types, CalendarTableEntry &table,
-                               idx_t estimated_cardinality)
+                               idx_t estimated_cardinality, bool return_chunk)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality),
-      table(table) {
+      table(table), return_chunk(return_chunk) {
 }
 
 class CalendarInsertGlobalSinkState : public GlobalSinkState {
@@ -19,6 +19,7 @@ public:
 	string calendar_id;
 	vector<string> names; // chunk column index -> schema column name
 	idx_t insert_count = 0;
+	vector<vector<Value>> returned; // RETURNING: one full-schema row per inserted event
 };
 
 unique_ptr<GlobalSinkState> CalendarInsert::GetGlobalSinkState(ClientContext &context) const {
@@ -37,8 +38,11 @@ SinkResultType CalendarInsert::Sink(ExecutionContext &context, DataChunk &chunk,
 	chunk.Flatten();
 	for (idx_t row = 0; row < chunk.size(); row++) {
 		auto event = gcal_map::RowToEvent(chunk, row, gstate.names);
-		gstate.client->Events(gstate.calendar_id).Insert(event);
+		auto created = gstate.client->Events(gstate.calendar_id).Insert(event);
 		gstate.insert_count++;
+		if (return_chunk) {
+			gstate.returned.push_back(gcal_map::EventToRow(created, gstate.names, gstate.calendar_id));
+		}
 	}
 	return SinkResultType::NEED_MORE_INPUT;
 }
@@ -46,6 +50,7 @@ SinkResultType CalendarInsert::Sink(ExecutionContext &context, DataChunk &chunk,
 class CalendarInsertSourceState : public GlobalSourceState {
 public:
 	bool finished = false;
+	idx_t offset = 0; // RETURNING: cursor into the collected rows
 };
 
 unique_ptr<GlobalSourceState> CalendarInsert::GetGlobalSourceState(ClientContext &context) const {
@@ -55,10 +60,15 @@ unique_ptr<GlobalSourceState> CalendarInsert::GetGlobalSourceState(ClientContext
 SourceResultType CalendarInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                  OperatorSourceInput &input) const {
 	auto &state = input.global_state.Cast<CalendarInsertSourceState>();
+	auto &sink = sink_state->Cast<CalendarInsertGlobalSinkState>();
+	if (return_chunk) {
+		gcal_map::EmitReturnedRows(chunk, sink.returned, state.offset);
+		return state.offset >= sink.returned.size() ? SourceResultType::FINISHED
+		                                             : SourceResultType::HAVE_MORE_OUTPUT;
+	}
 	if (state.finished) {
 		return SourceResultType::FINISHED;
 	}
-	auto &sink = sink_state->Cast<CalendarInsertGlobalSinkState>();
 	chunk.SetCardinality(1);
 	chunk.SetValue(0, 0, Value::BIGINT(static_cast<int64_t>(sink.insert_count)));
 	state.finished = true;

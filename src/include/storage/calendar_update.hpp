@@ -11,11 +11,13 @@ public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::EXTENSION;
 
 	CalendarUpdate(PhysicalPlan &physical_plan, vector<LogicalType> types, CalendarTableEntry &table,
-	               vector<PhysicalIndex> columns, vector<idx_t> value_indices, idx_t estimated_cardinality);
+	               vector<PhysicalIndex> columns, vector<idx_t> value_indices, idx_t estimated_cardinality,
+	               bool return_chunk);
 
 	CalendarTableEntry &table;
 	vector<PhysicalIndex> columns;     // SET target schema columns
 	vector<idx_t> value_indices;       // parallel: child-chunk index of each SET value
+	bool return_chunk;
 
 public:
 	bool IsSink() const override {

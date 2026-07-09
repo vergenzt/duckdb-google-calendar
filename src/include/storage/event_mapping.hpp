@@ -6,6 +6,8 @@
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/helper.hpp"
+#include "duckdb/common/vector_size.hpp"
 
 #include <algorithm>
 #include <unordered_map>
@@ -212,6 +214,164 @@ inline void ApplySet(nlohmann::json &event, const string &name, const Value &val
 	if (!ApplyColumn(event, name, val, all_day, /*update=*/true)) {
 		throw InvalidInputException("google_calendar: column \"%s\" is read-only and cannot be updated", name);
 	}
+}
+
+// ---------- read mapping (JSON -> column) ----------
+// Shared by the scan (each listed event) and by RETURNING (the event the API echoes back on a
+// mutation). Keyed by column name so it is independent of column order.
+
+inline Value JsonString(const nlohmann::json &event, const char *key) {
+	if (!event.contains(key) || event[key].is_null()) {
+		return Value(LogicalType::VARCHAR);
+	}
+	if (event[key].is_string()) {
+		return Value(event[key].get<string>());
+	}
+	return Value(event[key].dump());
+}
+
+inline Value JsonRaw(const nlohmann::json &event, const char *key) {
+	if (!event.contains(key) || event[key].is_null()) {
+		return Value(LogicalType::VARCHAR);
+	}
+	return Value(event[key].dump());
+}
+
+inline Value JsonBool(const nlohmann::json &event, const char *key) {
+	if (!event.contains(key) || !event[key].is_boolean()) {
+		return Value(LogicalType::BOOLEAN);
+	}
+	return Value::BOOLEAN(event[key].get<bool>());
+}
+
+inline Value JsonBigint(const nlohmann::json &event, const char *key) {
+	if (!event.contains(key) || !event[key].is_number_integer()) {
+		return Value(LogicalType::BIGINT);
+	}
+	return Value::BIGINT(event[key].get<int64_t>());
+}
+
+inline Value ParseEventTime(const nlohmann::json &event, const char *which) {
+	if (!event.contains(which) || !event[which].is_object()) {
+		return Value(LogicalType::TIMESTAMP_TZ);
+	}
+	const auto &node = event[which];
+	string raw;
+	if (node.contains("dateTime") && node["dateTime"].is_string()) {
+		raw = node["dateTime"].get<string>();
+	} else if (node.contains("date") && node["date"].is_string()) {
+		raw = node["date"].get<string>();
+	} else {
+		return Value(LogicalType::TIMESTAMP_TZ);
+	}
+	Value out;
+	string err;
+	if (Value(raw).DefaultTryCastAs(LogicalType::TIMESTAMP_TZ, out, &err)) {
+		return out;
+	}
+	return Value(LogicalType::TIMESTAMP_TZ);
+}
+
+inline Value ExtractField(const nlohmann::json &event, const string &field) {
+	// Plain-string passthrough columns -> Google JSON key.
+	static const std::unordered_map<string, const char *> string_keys = {
+	    {"event_id", "id"},
+	    {"summary", "summary"},
+	    {"description", "description"},
+	    {"location", "location"},
+	    {"status", "status"},
+	    {"html_link", "htmlLink"},
+	    {"created", "created"},
+	    {"updated", "updated"},
+	    {"color_id", "colorId"},
+	    {"transparency", "transparency"},
+	    {"visibility", "visibility"},
+	    {"event_type", "eventType"},
+	    {"recurring_event_id", "recurringEventId"},
+	    {"ical_uid", "iCalUID"},
+	    {"etag", "etag"},
+	    {"kind", "kind"},
+	    {"hangout_link", "hangoutLink"},
+	};
+	// Raw-JSON passthrough columns (objects/arrays) -> Google JSON key.
+	static const std::unordered_map<string, const char *> raw_keys = {
+	    {"attendees", "attendees"},
+	    {"recurrence", "recurrence"},
+	    {"reminders", "reminders"},
+	    {"conference_data", "conferenceData"},
+	    {"creator", "creator"},
+	    {"organizer", "organizer"},
+	    {"extended_properties", "extendedProperties"},
+	    {"source", "source"},
+	    {"attachments", "attachments"},
+	    {"working_location_properties", "workingLocationProperties"},
+	    {"out_of_office_properties", "outOfOfficeProperties"},
+	    {"focus_time_properties", "focusTimeProperties"},
+	};
+	// Boolean columns -> Google JSON key.
+	static const std::unordered_map<string, const char *> bool_keys = {
+	    {"end_time_unspecified", "endTimeUnspecified"},
+	    {"attendees_omitted", "attendeesOmitted"},
+	    {"anyone_can_add_self", "anyoneCanAddSelf"},
+	    {"guests_can_invite_others", "guestsCanInviteOthers"},
+	    {"guests_can_modify", "guestsCanModify"},
+	    {"guests_can_see_other_guests", "guestsCanSeeOtherGuests"},
+	    {"private_copy", "privateCopy"},
+	    {"locked", "locked"},
+	};
+
+	auto s = string_keys.find(field);
+	if (s != string_keys.end()) {
+		return JsonString(event, s->second);
+	}
+	auto r = raw_keys.find(field);
+	if (r != raw_keys.end()) {
+		return JsonRaw(event, r->second);
+	}
+	auto b = bool_keys.find(field);
+	if (b != bool_keys.end()) {
+		return JsonBool(event, b->second);
+	}
+	if (field == "start") {
+		return ParseEventTime(event, "start");
+	}
+	if (field == "end") {
+		return ParseEventTime(event, "end");
+	}
+	if (field == "original_start_time") {
+		return ParseEventTime(event, "originalStartTime");
+	}
+	if (field == "all_day") {
+		return Value::BOOLEAN(ExistingAllDay(event));
+	}
+	if (field == "sequence") {
+		return JsonBigint(event, "sequence");
+	}
+	return Value();
+}
+
+// Build one full-schema row from an event JSON the API echoed back. `names` maps output column ->
+// schema column name; calendar_id is synthetic (not on the event body) so it is filled from context.
+inline vector<Value> EventToRow(const nlohmann::json &event, const vector<string> &names, const string &calendar_id) {
+	vector<Value> row;
+	row.reserve(names.size());
+	for (auto &name : names) {
+		row.push_back(name == "calendar_id" ? Value(calendar_id) : ExtractField(event, name));
+	}
+	return row;
+}
+
+// Drain collected RETURNING rows into `chunk` (one source vector at a time), advancing `offset`.
+inline void EmitReturnedRows(DataChunk &chunk, const vector<vector<Value>> &returned, idx_t &offset) {
+	idx_t count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, returned.size() - offset);
+	for (idx_t i = 0; i < count; i++) {
+		auto &row = returned[offset + i];
+		for (idx_t c = 0; c < row.size(); c++) {
+			chunk.SetValue(c, i, row[c]);
+		}
+	}
+	chunk.SetCardinality(count);
+	offset += count;
 }
 
 } // namespace gcal_map

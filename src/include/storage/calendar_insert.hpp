@@ -10,9 +10,10 @@ public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::EXTENSION;
 
 	CalendarInsert(PhysicalPlan &physical_plan, vector<LogicalType> types, CalendarTableEntry &table,
-	               idx_t estimated_cardinality);
+	               idx_t estimated_cardinality, bool return_chunk);
 
 	CalendarTableEntry &table;
+	bool return_chunk;
 
 public:
 	bool IsSink() const override {

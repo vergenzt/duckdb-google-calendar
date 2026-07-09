@@ -13,9 +13,9 @@ namespace duckdb {
 
 CalendarUpdate::CalendarUpdate(PhysicalPlan &physical_plan, vector<LogicalType> types, CalendarTableEntry &table,
                                vector<PhysicalIndex> columns, vector<idx_t> value_indices,
-                               idx_t estimated_cardinality)
+                               idx_t estimated_cardinality, bool return_chunk)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality),
-      table(table), columns(std::move(columns)), value_indices(std::move(value_indices)) {
+      table(table), columns(std::move(columns)), value_indices(std::move(value_indices)), return_chunk(return_chunk) {
 }
 
 class CalendarUpdateGlobalSinkState : public GlobalSinkState {
@@ -24,6 +24,7 @@ public:
 	string calendar_id;
 	vector<string> names; // schema column index -> column name
 	idx_t update_count = 0;
+	vector<vector<Value>> returned; // RETURNING: one full-schema row per updated event
 };
 
 unique_ptr<GlobalSinkState> CalendarUpdate::GetGlobalSinkState(ClientContext &context) const {
@@ -58,10 +59,22 @@ SinkResultType CalendarUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 			}
 		}
 		for (idx_t c = 0; c < columns.size(); c++) {
-			gcal_map::ApplySet(event, gstate.names[columns[c].index], chunk.GetValue(value_indices[c], row), all_day);
+			auto &name = gstate.names[columns[c].index];
+			auto val = chunk.GetValue(value_indices[c], row);
+			// RETURNING expands the SET list to the whole row (unchanged columns carry their existing
+			// values), so read-only columns arrive here and must be skipped rather than rejected. A
+			// plain UPDATE only lists the columns the user actually SET, so a read-only one is an error.
+			if (return_chunk) {
+				gcal_map::ApplyColumn(event, name, val, all_day, /*update=*/true);
+			} else {
+				gcal_map::ApplySet(event, name, val, all_day);
+			}
 		}
-		gstate.client->Events(gstate.calendar_id).Update(id, event);
+		auto updated = gstate.client->Events(gstate.calendar_id).Update(id, event);
 		gstate.update_count++;
+		if (return_chunk) {
+			gstate.returned.push_back(gcal_map::EventToRow(updated, gstate.names, gstate.calendar_id));
+		}
 	}
 	return SinkResultType::NEED_MORE_INPUT;
 }
@@ -69,6 +82,7 @@ SinkResultType CalendarUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 class CalendarUpdateSourceState : public GlobalSourceState {
 public:
 	bool finished = false;
+	idx_t offset = 0; // RETURNING: cursor into the collected rows
 };
 
 unique_ptr<GlobalSourceState> CalendarUpdate::GetGlobalSourceState(ClientContext &context) const {
@@ -78,10 +92,15 @@ unique_ptr<GlobalSourceState> CalendarUpdate::GetGlobalSourceState(ClientContext
 SourceResultType CalendarUpdate::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                  OperatorSourceInput &input) const {
 	auto &state = input.global_state.Cast<CalendarUpdateSourceState>();
+	auto &sink = sink_state->Cast<CalendarUpdateGlobalSinkState>();
+	if (return_chunk) {
+		gcal_map::EmitReturnedRows(chunk, sink.returned, state.offset);
+		return state.offset >= sink.returned.size() ? SourceResultType::FINISHED
+		                                             : SourceResultType::HAVE_MORE_OUTPUT;
+	}
 	if (state.finished) {
 		return SourceResultType::FINISHED;
 	}
-	auto &sink = sink_state->Cast<CalendarUpdateGlobalSinkState>();
 	chunk.SetCardinality(1);
 	chunk.SetValue(0, 0, Value::BIGINT(static_cast<int64_t>(sink.update_count)));
 	state.finished = true;

@@ -10,10 +10,11 @@ public:
 	static constexpr const PhysicalOperatorType TYPE = PhysicalOperatorType::EXTENSION;
 
 	CalendarDelete(PhysicalPlan &physical_plan, vector<LogicalType> types, CalendarTableEntry &table,
-	               idx_t row_id_index, idx_t estimated_cardinality);
+	               idx_t row_id_index, idx_t estimated_cardinality, bool return_chunk);
 
 	CalendarTableEntry &table;
 	idx_t row_id_index;
+	bool return_chunk;
 
 public:
 	bool IsSink() const override {

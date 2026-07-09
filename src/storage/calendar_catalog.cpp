@@ -97,52 +97,40 @@ PhysicalOperator &CalendarCatalog::PlanCreateTableAs(ClientContext &context, Phy
 
 PhysicalOperator &CalendarCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                               optional_ptr<PhysicalOperator> plan) {
-	if (op.return_chunk) {
-		throw NotImplementedException("google_calendar INSERT does not support RETURNING");
-	}
 	auto &table = op.table.Cast<CalendarTableEntry>();
 	reference<PhysicalOperator> child = *plan;
 	if (!op.column_index_map.empty()) {
 		child = planner.ResolveDefaultsProjection(op, *plan);
 	}
-	auto &insert = planner.Make<CalendarInsert>(op.types, table, op.estimated_cardinality);
+	auto &insert = planner.Make<CalendarInsert>(op.types, table, op.estimated_cardinality, op.return_chunk);
 	insert.children.push_back(child);
 	return insert;
 }
 
 PhysicalOperator &CalendarCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
                                               PhysicalOperator &plan) {
-	if (op.return_chunk) {
-		throw NotImplementedException("google_calendar DELETE does not support RETURNING");
-	}
 	auto &table = op.table.Cast<CalendarTableEntry>();
 	auto &bound_ref = op.expressions[0]->Cast<BoundReferenceExpression>();
-	auto &del = planner.Make<CalendarDelete>(op.types, table, bound_ref.index, op.estimated_cardinality);
+	auto &del = planner.Make<CalendarDelete>(op.types, table, bound_ref.index, op.estimated_cardinality, op.return_chunk);
 	del.children.push_back(plan);
 	return del;
 }
 
 PhysicalOperator &CalendarCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                               PhysicalOperator &plan) {
-	if (op.return_chunk) {
-		throw NotImplementedException("google_calendar UPDATE does not support RETURNING");
-	}
 	auto &table = op.table.Cast<CalendarTableEntry>();
 	vector<idx_t> value_indices;
 	for (auto &expr : op.expressions) {
 		value_indices.push_back(expr->Cast<BoundReferenceExpression>().index);
 	}
-	auto &update =
-	    planner.Make<CalendarUpdate>(op.types, table, op.columns, std::move(value_indices), op.estimated_cardinality);
+	auto &update = planner.Make<CalendarUpdate>(op.types, table, op.columns, std::move(value_indices),
+	                                            op.estimated_cardinality, op.return_chunk);
 	update.children.push_back(plan);
 	return update;
 }
 
 PhysicalOperator &CalendarCatalog::PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,
                                                  LogicalMergeInto &op, PhysicalOperator &plan) {
-	if (op.return_chunk) {
-		throw NotImplementedException("google_calendar MERGE does not support RETURNING");
-	}
 	auto &table = op.table.Cast<CalendarTableEntry>();
 
 	map<MergeActionCondition, vector<unique_ptr<MergeIntoOperator>>> actions;

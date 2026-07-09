@@ -32,15 +32,15 @@ unique_ptr<MergeIntoOperator> PlanCalendarMergeIntoAction(ClientContext &context
 			value_indices.push_back(expr->Cast<BoundReferenceExpression>().index);
 		}
 		result->op = planner.Make<CalendarUpdate>(return_types, table, std::move(action.columns),
-		                                          std::move(value_indices), cardinality);
+		                                          std::move(value_indices), cardinality, op.return_chunk);
 		break;
 	}
 	case MergeActionType::MERGE_DELETE: {
-		result->op = planner.Make<CalendarDelete>(return_types, table, op.row_id_start, cardinality);
+		result->op = planner.Make<CalendarDelete>(return_types, table, op.row_id_start, cardinality, op.return_chunk);
 		break;
 	}
 	case MergeActionType::MERGE_INSERT: {
-		result->op = planner.Make<CalendarInsert>(return_types, table, cardinality);
+		result->op = planner.Make<CalendarInsert>(return_types, table, cardinality, op.return_chunk);
 		if (!action.column_index_map.empty()) {
 			vector<unique_ptr<Expression>> new_expressions;
 			for (auto &col : op.table.GetColumns().Physical()) {
