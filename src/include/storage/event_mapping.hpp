@@ -85,7 +85,7 @@ inline void ReencodeTimeNode(nlohmann::json &event, const char *key, bool all_da
 }
 
 // Writable columns -> Google JSON key, grouped by encoding. Anything not listed here is
-// server-managed / read-only (id is the UPDATE key, so it is settable only on INSERT).
+// server-managed / read-only (event_id is the UPDATE key, so it is settable only on INSERT).
 inline const std::unordered_map<string, const char *> &WritableStringKeys() {
 	static const std::unordered_map<string, const char *> m = {
 	    {"summary", "summary"},   {"description", "description"},   {"location", "location"},
@@ -121,7 +121,7 @@ inline const std::unordered_map<string, const char *> &WritableJsonKeys() {
 // (NULL erases the key); update=false (INSERT) simply omits NULLs. Returns false if the column is
 // not writable in this mode (read-only / server-managed), which UPDATE turns into an error.
 inline bool ApplyColumn(nlohmann::json &event, const string &name, const Value &val, bool all_day, bool update) {
-	if (name == "id") {
+	if (name == "event_id") {
 		// client-supplied id (base32hex, len 5-1024) on INSERT; the PATCH key (not settable) on UPDATE.
 		if (update) {
 			return false;

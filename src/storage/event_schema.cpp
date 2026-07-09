@@ -10,7 +10,7 @@ void AddEventsColumns(ColumnList &columns) {
 	columns.AddColumn(ColumnDefinition("calendar_id", LogicalType::VARCHAR));
 
 	// Core scalar fields.
-	columns.AddColumn(ColumnDefinition("id", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("event_id", LogicalType::VARCHAR));
 	columns.AddColumn(ColumnDefinition("summary", LogicalType::VARCHAR));
 	columns.AddColumn(ColumnDefinition("description", LogicalType::VARCHAR));
 	columns.AddColumn(ColumnDefinition("location", LogicalType::VARCHAR));

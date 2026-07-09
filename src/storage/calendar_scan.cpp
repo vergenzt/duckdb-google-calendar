@@ -287,7 +287,7 @@ static Value ParseEventTime(const json &event, const char *which) {
 static Value ExtractField(const json &event, const string &field) {
 	// Plain-string passthrough columns -> Google JSON key.
 	static const std::unordered_map<string, const char *> string_keys = {
-	    {"id", "id"},
+	    {"event_id", "id"},
 	    {"summary", "summary"},
 	    {"description", "description"},
 	    {"location", "location"},
