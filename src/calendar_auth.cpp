@@ -16,6 +16,11 @@
 #include <openssl/sha.h>
 #include <openssl/rand.h>
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
+#endif
+
 #include "duckdb/common/exception/binder_exception.hpp"
 
 #include "calendar_auth.hpp"
@@ -229,6 +234,100 @@ static int DesiredLoopbackPort() {
 	}
 }
 
+// Service name under which the Google refresh token is filed in the OS keyring.
+// The account is the OAuth client_id, so distinct OAuth apps don't collide.
+static const std::string KEYCHAIN_SERVICE = "duckdb-google-calendar";
+
+#ifdef __APPLE__
+// Read a secret from the macOS login keychain. Returns false if absent.
+static bool KeychainGet(const std::string &service, const std::string &account, std::string &out) {
+	CFStringRef svc = CFStringCreateWithCString(nullptr, service.c_str(), kCFStringEncodingUTF8);
+	CFStringRef acc = CFStringCreateWithCString(nullptr, account.c_str(), kCFStringEncodingUTF8);
+	const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount, kSecReturnData, kSecMatchLimit};
+	const void *vals[] = {kSecClassGenericPassword, svc, acc, kCFBooleanTrue, kSecMatchLimitOne};
+	CFDictionaryRef query =
+	    CFDictionaryCreate(nullptr, keys, vals, 5, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	CFDataRef data = nullptr;
+	OSStatus status = SecItemCopyMatching(query, reinterpret_cast<CFTypeRef *>(&data));
+	CFRelease(query);
+	CFRelease(svc);
+	CFRelease(acc);
+	if (status != errSecSuccess || !data) {
+		return false;
+	}
+	out.assign(reinterpret_cast<const char *>(CFDataGetBytePtr(data)), CFDataGetLength(data));
+	CFRelease(data);
+	return true;
+}
+
+// Store (or replace) a secret in the macOS login keychain. Best-effort: a failure
+// here just means we don't cache, so we log and carry on rather than fail the run.
+static void KeychainSet(const std::string &service, const std::string &account, const std::string &value) {
+	CFStringRef svc = CFStringCreateWithCString(nullptr, service.c_str(), kCFStringEncodingUTF8);
+	CFStringRef acc = CFStringCreateWithCString(nullptr, account.c_str(), kCFStringEncodingUTF8);
+	CFDataRef val = CFDataCreate(nullptr, reinterpret_cast<const UInt8 *>(value.data()), value.size());
+	{
+		const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount};
+		const void *vals[] = {kSecClassGenericPassword, svc, acc};
+		CFDictionaryRef del = CFDictionaryCreate(nullptr, keys, vals, 3, &kCFTypeDictionaryKeyCallBacks,
+		                                         &kCFTypeDictionaryValueCallBacks);
+		SecItemDelete(del);
+		CFRelease(del);
+	}
+	const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount, kSecValueData};
+	const void *vals[] = {kSecClassGenericPassword, svc, acc, val};
+	CFDictionaryRef add =
+	    CFDictionaryCreate(nullptr, keys, vals, 4, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	OSStatus status = SecItemAdd(add, nullptr);
+	CFRelease(add);
+	CFRelease(val);
+	CFRelease(svc);
+	CFRelease(acc);
+	if (status != errSecSuccess) {
+		std::cerr << "Warning: could not save Google refresh token to keychain (OSStatus " << status
+		          << "); next run will re-authorize.\n";
+	}
+}
+#else
+// ponytail: keyring caching is macOS-only; elsewhere every run does the browser flow.
+// Add libsecret (Linux) / wincred (Windows) backends here if that need shows up.
+static bool KeychainGet(const std::string &, const std::string &, std::string &) {
+	return false;
+}
+static void KeychainSet(const std::string &, const std::string &, const std::string &) {
+}
+#endif
+
+// Exchange a stored refresh token for a fresh access token (no browser, no user
+// interaction). Throws if the refresh token is revoked/expired so the caller can
+// fall back to the interactive flow.
+static std::string RefreshAccessToken(const std::string &client_id, const std::string &client_secret,
+                                      const std::string &refresh_token) {
+	duckdb_httplib_openssl::Client token_client("https://oauth2.googleapis.com");
+	duckdb_httplib_openssl::Params params;
+	params.emplace("client_id", client_id);
+	if (!client_secret.empty()) {
+		params.emplace("client_secret", client_secret);
+	}
+	params.emplace("refresh_token", refresh_token);
+	params.emplace("grant_type", "refresh_token");
+
+	auto result = token_client.Post("/token", params);
+	if (!result) {
+		throw IOException("OAuth token refresh request failed: " +
+		                  duckdb_httplib_openssl::to_string(result.error()));
+	}
+	if (result->status != 200) {
+		throw IOException("OAuth token refresh failed (HTTP " + std::to_string(result->status) + "): " +
+		                  result->body);
+	}
+	json resp = json::parse(result->body);
+	if (!resp.contains("access_token")) {
+		throw IOException("OAuth token refresh response did not contain an access_token: " + result->body);
+	}
+	return resp["access_token"].get<std::string>();
+}
+
 // OAuth 2.0 authorization-code flow with PKCE for installed/desktop apps
 // (https://developers.google.com/identity/protocols/oauth2/native-app).
 // Replaces the deprecated OOB flow: we open the consent screen, capture the
@@ -245,6 +344,19 @@ std::string InitiateOAuthFlow() {
 	const std::string client_id = client_id_env;
 	const char *client_secret_env = std::getenv("GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET");
 	const std::string client_secret = (client_secret_env && *client_secret_env) ? client_secret_env : "";
+
+	// Fast path: if we cached a refresh token from a previous run, mint a new
+	// access token silently. Delete the keychain item to force re-authorization:
+	//   security delete-generic-password -s duckdb-google-calendar
+	std::string cached_refresh;
+	if (KeychainGet(KEYCHAIN_SERVICE, client_id, cached_refresh) && !cached_refresh.empty()) {
+		try {
+			return RefreshAccessToken(client_id, client_secret, cached_refresh);
+		} catch (const std::exception &e) {
+			std::cerr << "Cached Google refresh token unusable (" << e.what()
+			          << "); falling back to browser authorization.\n";
+		}
+	}
 
 	// PKCE parameters and CSRF state.
 	const std::string code_verifier = GeneratePkceVerifier();
@@ -369,6 +481,11 @@ std::string InitiateOAuthFlow() {
 	}
 	if (!token_response.contains("access_token")) {
 		throw IOException("OAuth token response did not contain an access_token: " + result->body);
+	}
+	// Cache the refresh token so subsequent runs skip the browser. `access_type=offline`
+	// + `prompt=consent` above guarantee Google returns one on the interactive flow.
+	if (token_response.contains("refresh_token")) {
+		KeychainSet(KEYCHAIN_SERVICE, client_id, token_response["refresh_token"].get<std::string>());
 	}
 	return token_response["access_token"].get<std::string>();
 }
