@@ -14,10 +14,10 @@ using src_replicated
     )
 
   when matched and list_bool_or([
-    dst.summary != src_replicated.summary,
-    dst.description != src_replicated.description,
-    dst.start != src_replicated.start,
-    dst."end" != src_replicated."end",
+    dst.summary is distinct from src_replicated.summary,
+    dst.description is distinct from src_replicated.description,
+    dst.start is distinct from src_replicated.start,
+    dst."end" is distinct from src_replicated."end",
   ])
   then update set
     summary = src_replicated.summary,
