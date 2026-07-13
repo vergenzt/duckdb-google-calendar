@@ -19,6 +19,7 @@ create temporary view src_replicated as
     from interviews
     select
       md5(calendar_id) || md5('prep-for-' || event_id) as event_id,
+      color_id as color_id,
       'Prep: ' || summary as summary,
       start - interval '30 minutes' as start,
       start as "end",
@@ -29,6 +30,7 @@ create temporary view src_replicated as
     from interviews
     select
       md5(calendar_id) || md5('feedback-for-' || event_id) as event_id,
+      color_id as color_id,
       'Feedback: ' || summary as summary,
       "end" as start,
       "end" + interval '30 minutes' as "end",
