@@ -9,7 +9,7 @@ create temporary view src_replicated as
     format(
       '[{}] {}',
       getenv('EMPLOYER_NAME'),
-      summary.regexp_replace('^((Prep|Feedback): )?Interview .*', 'Interview')
+      summary.regexp_replace('^((?:(?:Prep|Feedback): )?Interview) .*', '\1')
     ) as summary,
     '' as description,
     start as start,
