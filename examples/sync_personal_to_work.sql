@@ -88,4 +88,4 @@ create temporary view src_replicated as
     and list_bool_or(apply([start, "end"], lambda ts: ts between workday_start and workday_end))
 ;
 
--- .read examples/lib/sync.sql
+.read examples/lib/sync.sql
