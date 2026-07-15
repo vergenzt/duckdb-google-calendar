@@ -4,6 +4,7 @@
 #include "storage/event_mapping.hpp"
 
 #include "calendar/client.hpp"
+#include "calendar/exception.hpp"
 
 namespace duckdb {
 
@@ -38,7 +39,30 @@ SinkResultType CalendarInsert::Sink(ExecutionContext &context, DataChunk &chunk,
 	chunk.Flatten();
 	for (idx_t row = 0; row < chunk.size(); row++) {
 		auto event = gcal_map::RowToEvent(chunk, row, gstate.names);
-		auto created = gstate.client->Events(gstate.calendar_id).Insert(event);
+		nlohmann::json created;
+		try {
+			created = gstate.client->Events(gstate.calendar_id).Insert(event);
+		} catch (const gcal::CalendarApiException &e) {
+			// 409 = the id already exists server-side: either a replica living outside the scan window,
+			// or a deleted event whose id Google reserves for months (events.insert can't reuse it). The
+			// MERGE saw "not matched" only because events.list hides both cases. events.update (PUT)
+			// overwrites/resurrects in place, turning this insert into an upsert against the reserved id.
+			if (e.GetStatusCode() == 409 && event.contains("id")) {
+				created = gstate.client->Events(gstate.calendar_id).Update(event["id"].get<string>(), event);
+			} else {
+				auto id = event.contains("id") ? event["id"].get<string>() : string("(server-assigned)");
+				throw IOException("google_calendar: events.insert failed for event_id=%s on calendar %s: %s\n"
+				                  "request body: %s",
+				                  id, gstate.calendar_id, e.what(), event.dump());
+			}
+		} catch (const std::exception &e) {
+			// Surface which event failed: the client-supplied id and full request body are otherwise
+			// lost, making a non-API failure impossible to trace back to a source event.
+			auto id = event.contains("id") ? event["id"].get<string>() : string("(server-assigned)");
+			throw IOException("google_calendar: events.insert failed for event_id=%s on calendar %s: %s\n"
+			                  "request body: %s",
+			                  id, gstate.calendar_id, e.what(), event.dump());
+		}
 		gstate.insert_count++;
 		if (return_chunk) {
 			gstate.returned.push_back(gcal_map::EventToRow(created, gstate.names, gstate.calendar_id));
