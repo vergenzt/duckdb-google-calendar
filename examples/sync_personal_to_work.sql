@@ -1,56 +1,88 @@
--- set variable src_cal_id = getenv('PERSONAL_CALENDAR_ID');
--- set variable dst_cal_id = getenv('EMPLOYER_CALENDAR_ID');
--- .read examples/lib/setup.sql
 
--- create or replace function filter_src(src) as
--- ;
+set variable src_cal_id = getenv('PERSONAL_CALENDAR_ID');
+set variable dst_cal_id = getenv('EMPLOYER_CALENDAR_ID');
+.read examples/lib/setup.sql
 
--- create temporary view src as
---   from src_calendar.src
+create function signed_extremum(sign, a, b) as
+  case sign
+  when +1 then greatest(a, b)
+  when -1 then least(a, b)
+  else error('sign must be positive or negative')
+  end
+;
 
---   where should_replicate(src)
---   and not src.all_day
---   and ( /* business hours */
---     src.start::timetz between timetz '8:00' and timetz '17:00' or
---     src."end"::timetz between timetz '8:00' and timetz '17:00'
---   )
---   and extract('dayofweek' from src.start) between 1 /* monday */ and 5 /* friday */
+create function value_or_signed_timestamp_infinity(timestamp_val, sign) as
+  coalesce(
+    timestamp_val,
+    case sign
+    when -1 then '-infinity'::timestamptz
+    when  1 then ' infinity'::timestamptz
+    else error('Invalid sign for infinity: ' || sign)
+    end
+  )
+;
 
---   select
---     event_id.as_replica_from(calendar_id) as event_id,
---     'OOO' as summary,
---     '' as description,
---     start - interval '15 minutes' as start,
---     "end" + interval '15 minutes' as "end",
--- ;
+create function extend_bounded(val, extend_by, bound_val) as
+  signed_extremum(
+    /* sign := */ -1 * sign(epoch(extend_by)) /* *least* in the direction of extend_by */,
+    /* a := */ val + extend_by /* compare: adding extend_by directly */,
+    /* b := */ ( /* compare: the bound_val, but only if it's on the `val + extend_by` side of `val` */
+      signed_extremum(
+        /* sign := */ sign(epoch(extend_by)) /* *most* in the direction of extend_by */,
+        /* a := */ value_or_signed_timestamp_infinity(bound_val, sign(epoch(extend_by))),
+        /* b := */ val
+      )
+    )
+  )
+;
 
--- merge into dst_calendar.dst
--- using (
---   with src as (
---     from src_calendar.src
---     where filter_src(src)
---     and should_replicate(src)
---     and not event_id.is_replica_from(getvariable('dst_cal_id'))
---   )
---   select * from map_src(src)
--- ) as src
---   on dst.event_id = md5(src.calendar_id) || md5(src.event_id)
+-- business hours are evaluated in host's local time zone
+create temporary view src_replicated as
+  from src_calendar.src
 
---   when not matched then insert (event_id, start, "end", summary)
---     values (
---       md5(getvariable('src_cal_id')) || md5(src.event_id),
---       src.*
---     )
+  select
+    event_id.as_replica_from(calendar_id) as event_id,
+    getenv('REPLICA_COLOR_ID') as color_id,
+    '' as description,
 
---   when matched then update set
---     summary = src.summary,
---     description = src.description,
---     start = src.start,
---     "end" = src."end",
+    lower(summary) similar to '.*\b(therapy|counseling|appointment)\b.*' as is_medical,
 
---   when not matched by source
---   and dst.event_id.is_replica_from(getvariable('src_cal_id'))
---   then delete
+    coalesce(case when is_medical then 'OOO for Appointment' end, summary) as summary,
 
---   returning merge_action, *
--- ;
+    case when is_medical
+    then
+      greatest(
+        /* extend start time of appointment back by 15 minutes */
+        extend_bounded(start, interval '-15 minutes', lag("end") over (order by start)),
+        /* ...but no earlier than start of workday */
+        date_trunc('day', start) + interval '08 hours'
+      )
+    else
+      start
+    end
+    as start,
+
+    case when is_medical
+    then
+      least(
+        /* extend end time of appointment out by 30 minutes */
+        extend_bounded("end", interval '30 minutes', lead(start) over (order by "end")),
+        /* ...but no later than end of workday */
+        date_trunc('day', start) + interval '17 hours'
+      )
+    else
+      "end"
+    end as "end",
+
+    date_trunc('day', start) + interval '08 hours' as workday_start,
+    date_trunc('day', start) + interval '17 hours' - interval '1 second' as workday_end
+
+  where
+    should_replicate(src)
+    and not event_id.is_replica_from(getvariable('dst_cal_id'))
+    and not all_day
+    and isodow(start) <= 5
+    and list_bool_or(apply([start, "end"], lambda ts: ts between workday_start and workday_end))
+;
+
+-- .read examples/lib/sync.sql

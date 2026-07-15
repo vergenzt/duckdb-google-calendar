@@ -7,11 +7,14 @@ load google_calendar;
 .once /dev/null
 create secret google_oauth (type google_calendar, provider oauth);
 
+set variable default_window_length = interval '14 days';
+set variable default_window_start = today();
+
 attach 'me' as src_calendar (
   type google_calendar,
   secret google_oauth,
-  default_window_start now(),
-  default_window_length interval '30 days',
+  default_window_start getvariable('default_window_start'),
+  default_window_length getvariable('default_window_length'),
   calendar_aliases map {
     getvariable('src_cal_id'): 'src',
   }
@@ -20,8 +23,8 @@ attach 'me' as src_calendar (
 attach 'me' as dst_calendar (
   type google_calendar,
   secret google_oauth,
-  default_window_start now(),
-  default_window_length interval '30 days',
+  default_window_start getvariable('default_window_start'),
+  default_window_length getvariable('default_window_length'),
   calendar_aliases map {
     getvariable('dst_cal_id'): 'dst',
   }

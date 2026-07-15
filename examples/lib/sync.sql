@@ -1,5 +1,7 @@
 -- callers should declare a temporary view called "src_replicated"
 
+.mode json
+
 merge into dst_calendar.dst
 using src_replicated
   on dst.event_id = src_replicated.event_id
