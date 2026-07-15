@@ -7,11 +7,15 @@ create temporary view src_replicated as
   select
     event_id.as_replica_from(calendar_id) as event_id,
     getenv('REPLICA_COLOR_ID') as color_id,
-    format(
+
+    case
+    when summary.starts_with('[Personal]') then summary
+    else format(
       '[{}] {}',
       getenv('EMPLOYER_NAME'),
       summary.regexp_replace('^((?:(?:Prep|Feedback): )?Interview) .*', '\1')
-    ) as summary,
+    )
+    end as summary,
     '' as description,
     start as start,
     "end" as "end",

@@ -47,7 +47,10 @@ create temporary view src_replicated as
 
     lower(summary) similar to '.*\b(therapy|counseling|appointment)\b.*' as is_medical,
 
-    coalesce(case when is_medical then 'OOO for Appointment' end, summary) as summary,
+    '[Personal] ' || coalesce(
+      case when is_medical then 'Appointment' end,
+      summary
+    ) as summary,
 
     case when is_medical
     then
