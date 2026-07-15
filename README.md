@@ -93,9 +93,9 @@ is mainly for quick tests:
 
     ATTACH 'me' AS cal (TYPE google_calendar, SECRET cal);
     SHOW TABLES FROM cal;   -- one table per calendar (the primary calendar is cal.primary)
-
+    
     -- Reads REQUIRE an explicit time bound on `start`:
-    SELECT id, summary, start, "end"
+    SELECT event_id, summary, start, "end"
     FROM cal.primary
     WHERE start >= TIMESTAMPTZ '2026-06-01 00:00-04' AND start < TIMESTAMPTZ '2026-07-01 00:00-04';
 
@@ -103,22 +103,68 @@ is mainly for quick tests:
 
     INSERT INTO cal.primary (summary, start, "end")
     VALUES ('Standup', TIMESTAMPTZ '2026-06-10 09:00-04', TIMESTAMPTZ '2026-06-10 09:15-04');
-
-    UPDATE cal.primary SET location = 'Room 4' WHERE id = 'abc123';
-    DELETE FROM cal.primary WHERE id = 'abc123';
-
-    MERGE INTO cal.primary AS t USING staging AS s ON t.id = s.id
+    
+    UPDATE cal.primary SET location = 'Room 4' WHERE event_id = 'abc123';
+    DELETE FROM cal.primary WHERE event_id = 'abc123';
+    
+    MERGE INTO cal.primary AS t USING staging AS s ON t.event_id = s.event_id
       WHEN MATCHED THEN UPDATE SET summary = s.summary
       WHEN NOT MATCHED THEN INSERT (summary, start, "end") VALUES (s.summary, s.start, s."end");
 
 ## Schema & limitations
 
-- `events` columns: `id, summary, description, location, status, html_link, created, updated` (VARCHAR);
-  `start`, `end` (TIMESTAMP WITH TIME ZONE); `all_day` (BOOLEAN);
-  `attendees, recurrence, reminders, conference_data` (VARCHAR raw-JSON passthrough).
-- Row identity is the server event `id`; `UPDATE`/`DELETE`/`MERGE` key on it.
+Every `events` table has the following fixed columns (a raw-JSON passthrough is
+the Google JSON for that field, emitted/accepted as a VARCHAR string):
+
+| Column | Type | Writable | Notes |
+| --- | --- | --- | --- |
+| `calendar_id` | VARCHAR | no | Owning calendar's id; synthesized by the scan, not a Google event field |
+| `event_id` | VARCHAR | INSERT only | Row identity; the `UPDATE`/`DELETE`/`MERGE` key. Client-suppliable on INSERT (base32hex, len 5–1024), otherwise server-assigned |
+| `summary` | VARCHAR | yes | |
+| `description` | VARCHAR | yes | |
+| `location` | VARCHAR | yes | |
+| `status` | VARCHAR | yes | |
+| `html_link` | VARCHAR | no | |
+| `created` | VARCHAR | no | |
+| `updated` | VARCHAR | no | |
+| `start` | TIMESTAMP WITH TIME ZONE | yes | |
+| `end` | TIMESTAMP WITH TIME ZONE | yes | Important: `end` is a SQL keyword, so must be double-quoted when referenced as an identifier. |
+| `all_day` | BOOLEAN | yes | Drives date-vs-dateTime encoding of `start`/`end` |
+| `color_id` | VARCHAR | yes | |
+| `transparency` | VARCHAR | yes | `opaque` (busy) / `transparent` (free) |
+| `visibility` | VARCHAR | yes | `default`/`public`/`private`/`confidential` |
+| `event_type` | VARCHAR | yes | |
+| `recurring_event_id` | VARCHAR | no | |
+| `original_start_time` | TIMESTAMP WITH TIME ZONE | no | |
+| `ical_uid` | VARCHAR | no | |
+| `sequence` | BIGINT | no | |
+| `etag` | VARCHAR | no | |
+| `kind` | VARCHAR | no | |
+| `hangout_link` | VARCHAR | no | |
+| `creator` | VARCHAR | no | raw-JSON passthrough |
+| `organizer` | VARCHAR | no | raw-JSON passthrough |
+| `end_time_unspecified` | BOOLEAN | no | |
+| `attendees_omitted` | BOOLEAN | no | |
+| `anyone_can_add_self` | BOOLEAN | yes | |
+| `guests_can_invite_others` | BOOLEAN | yes | |
+| `guests_can_modify` | BOOLEAN | yes | |
+| `guests_can_see_other_guests` | BOOLEAN | yes | |
+| `private_copy` | BOOLEAN | no | |
+| `locked` | BOOLEAN | no | |
+| `attendees` | VARCHAR | yes | raw-JSON passthrough |
+| `recurrence` | VARCHAR | yes | raw-JSON passthrough |
+| `reminders` | VARCHAR | yes | raw-JSON passthrough |
+| `conference_data` | VARCHAR | yes | raw-JSON passthrough |
+| `extended_properties` | VARCHAR | yes | raw-JSON passthrough |
+| `source` | VARCHAR | yes | raw-JSON passthrough |
+| `attachments` | VARCHAR | yes | raw-JSON passthrough |
+| `working_location_properties` | VARCHAR | yes | raw-JSON passthrough |
+| `out_of_office_properties` | VARCHAR | no | raw-JSON passthrough |
+| `focus_time_properties` | VARCHAR | no | raw-JSON passthrough |
+
+- Row identity is the server event `event_id`; `UPDATE`/`DELETE`/`MERGE` key on it.
 - A time bound on `start` is required for reads (unbounded scans error).
-- `UPDATE` is read-modify-write (GET + PUT); `id/html_link/created/updated` are read-only.
-- `RETURNING` is not supported; writes are serialized; transient 429/5xx are retried with backoff.
+- `UPDATE` is read-modify-write (GET + PUT); `no`-writable columns above are read-only.
+- `RETURNING` is supported; writes are serialized; transient 429/5xx are retried with backoff.
 - Credential-free mock-backed sqllogictests are deferred to v2; `test/sql/live.test` exercises the
   live API when `GOOGLE_CALENDAR_ACCESS_TOKEN` is set.
