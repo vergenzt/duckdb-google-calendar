@@ -2,7 +2,7 @@
 
 .mode json
 
-merge into dst_calendar.dst
+merge into calendar.dst
 using src_replicated
   on dst.event_id = src_replicated.event_id
 

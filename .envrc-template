@@ -10,5 +10,5 @@ export CONTRACT_CALENDAR_ID=op://$OP_ITEM/contract-email
 export EMPLOYER_NAME=op://$OP_ITEM/employer-name
 export CONTRACT_NAME=op://$OP_ITEM/contract-name
 
-# I got this by manually setting a color to an event, then `select color_id from src_calendar.src where color_id is not null`
+# I got this by manually setting a color to an event, then `select color_id from calendar.src where color_id is not null`
 export REPLICA_COLOR_ID=4

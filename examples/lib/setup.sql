@@ -10,23 +10,17 @@ create secret google_oauth (type google_calendar, provider oauth);
 set variable default_window_length = interval '14 days';
 set variable default_window_start = today();
 
-attach 'me' as src_calendar (
+attach 'me' as calendar (
   type google_calendar,
   secret google_oauth,
   default_window_start getvariable('default_window_start'),
   default_window_length getvariable('default_window_length'),
   calendar_aliases map {
-    getvariable('src_cal_id'): 'src',
-  }
-);
-
-attach 'me' as dst_calendar (
-  type google_calendar,
-  secret google_oauth,
-  default_window_start getvariable('default_window_start'),
-  default_window_length getvariable('default_window_length'),
-  calendar_aliases map {
-    getvariable('dst_cal_id'): 'dst',
+    'personal': getenv('PERSONAL_CALENDAR_ID'),
+    'employer': getenv('EMPLOYER_CALENDAR_ID'),
+    'contract': getenv('CONTRACT_CALENDAR_ID'),
+    'src': getvariable('src_cal_id'),
+    'dst': getvariable('dst_cal_id'),
   }
 );
 

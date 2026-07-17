@@ -17,8 +17,9 @@ public:
 		return secret_name;
 	}
 
-	// Optional map of calendar ID -> table name. A calendar whose ID is a key here is mounted only
-	// under its alias; every other calendar is mounted under its raw ID.
+	// Optional map of alias (table name) -> calendar ID. A calendar referenced by one or more aliases
+	// is mounted only under those aliases; every other calendar is mounted under its raw ID. Several
+	// aliases may point at the same calendar ID, mounting it under each name.
 	case_insensitive_map_t<string> calendar_aliases;
 
 	// Builds per-calendar tables via the Calendar API (enumeration body lands in Slice 6).

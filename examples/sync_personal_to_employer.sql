@@ -38,7 +38,7 @@ create function extend_bounded(val, extend_by, bound_val) as
 
 -- business hours are evaluated in host's local time zone
 create temporary view src_replicated as
-  from src_calendar.src
+  from calendar.src
 
   select
     event_id.as_replica_from(calendar_id) as event_id,

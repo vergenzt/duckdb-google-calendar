@@ -55,30 +55,38 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 	}
 	gcal::GoogleCalendarClient client(*http, *auth);
 
-	case_insensitive_set_t aliased_ids;
+	// Invert alias -> calendar ID into calendar ID -> [aliases], since one calendar ID may carry
+	// several aliases and each becomes its own mounted table.
+	case_insensitive_map_t<vector<string>> aliases_by_id;
+	for (auto &alias : calendar_aliases) {
+		aliases_by_id[alias.second].push_back(alias.first);
+	}
+
+	case_insensitive_set_t seen_ids;
 	string page_token;
 	do {
 		auto response = client.CalendarList().List(page_token);
 		for (auto &cal : response.items) {
-			// Calendar IDs are globally unique, so they serve directly as table names, unless an
-			// alias was supplied at ATTACH, in which case the calendar is mounted only under it.
-			auto alias = calendar_aliases.find(cal.id);
-			auto table_name = alias != calendar_aliases.end() ? alias->second : cal.id;
-			if (alias != calendar_aliases.end()) {
-				aliased_ids.insert(cal.id);
+			seen_ids.insert(cal.id);
+			// Calendar IDs are globally unique, so they serve directly as table names, unless one or
+			// more aliases were supplied at ATTACH, in which case the calendar is mounted only under
+			// each of them.
+			auto it = aliases_by_id.find(cal.id);
+			vector<string> table_names = it != aliases_by_id.end() ? it->second : vector<string> {cal.id};
+			for (auto &table_name : table_names) {
+				CreateTableInfo info(*main_schema, table_name);
+				AddEventsColumns(info.columns);
+				auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, cal.id);
+				main_schema->AddTable(std::move(entry));
 			}
-			CreateTableInfo info(*main_schema, table_name);
-			AddEventsColumns(info.columns);
-			auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, cal.id);
-			main_schema->AddTable(std::move(entry));
 		}
 		page_token = response.nextPageToken;
 	} while (!page_token.empty());
 
 	// Fail eagerly if an alias points at a calendar ID that doesn't exist.
 	for (auto &alias : calendar_aliases) {
-		if (aliased_ids.find(alias.first) == aliased_ids.end()) {
-			throw InvalidInputException("calendar_aliases refers to unknown calendar ID \"%s\"", alias.first);
+		if (seen_ids.find(alias.second) == seen_ids.end()) {
+			throw InvalidInputException("calendar_aliases refers to unknown calendar ID \"%s\"", alias.second);
 		}
 	}
 }

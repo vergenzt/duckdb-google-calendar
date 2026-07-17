@@ -5,7 +5,7 @@ set variable dst_cal_id = getenv('EMPLOYER_CALENDAR_ID');
 create temporary view src_replicated as
 
   with interviews as (
-    from src_calendar.src
+    from calendar.src
     where
       should_replicate(src)
       and not event_id.is_replica_from(getvariable('dst_cal_id'))

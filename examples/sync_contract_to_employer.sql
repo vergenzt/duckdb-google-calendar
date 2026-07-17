@@ -3,7 +3,7 @@ set variable dst_cal_id = getenv('EMPLOYER_CALENDAR_ID');
 .read examples/lib/setup.sql
 
 create temporary view src_replicated as
-  from src_calendar.src
+  from calendar.src
   select
     event_id.as_replica_from(calendar_id) as event_id,
     getenv('REPLICA_COLOR_ID') as color_id,

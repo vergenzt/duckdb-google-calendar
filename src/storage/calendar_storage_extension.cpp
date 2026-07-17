@@ -9,6 +9,8 @@
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 
+#include <iostream>
+
 namespace duckdb {
 
 static unique_ptr<Catalog> CalendarAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
@@ -22,16 +24,21 @@ static unique_ptr<Catalog> CalendarAttach(optional_ptr<StorageExtensionInfo> sto
 
 	auto catalog = make_uniq<CalendarCatalog>(db, info.path, secret_name);
 
-	// Optional calendar_aliases: MAP(VARCHAR, VARCHAR) of calendar ID -> mounted table name.
+	// Optional calendar_aliases: MAP(VARCHAR, VARCHAR) of alias (mounted table name) -> calendar ID.
 	auto alias_it = info.options.find("calendar_aliases");
 	if (alias_it != info.options.end()) {
 		auto &v = alias_it->second;
 		if (v.type().id() != LogicalTypeId::MAP || MapType::KeyType(v.type()).id() != LogicalTypeId::VARCHAR ||
 		    MapType::ValueType(v.type()).id() != LogicalTypeId::VARCHAR) {
-			throw BinderException("calendar_aliases must be a MAP(VARCHAR, VARCHAR) of calendar ID -> table name");
+			throw BinderException("calendar_aliases must be a MAP(VARCHAR, VARCHAR) of alias -> calendar ID");
 		}
 		for (auto &entry : ListValue::GetChildren(v)) {
 			auto &kv = StructValue::GetChildren(entry);
+			if (kv[1].IsNull()) {
+				std::cerr << "Warning: calendar ID for alias \""
+				          << (kv[0].IsNull() ? "NULL" : StringValue::Get(kv[0])) << "\" is null; skipping.\n";
+				continue;
+			}
 			catalog->calendar_aliases[StringValue::Get(kv[0])] = StringValue::Get(kv[1]);
 		}
 	}
