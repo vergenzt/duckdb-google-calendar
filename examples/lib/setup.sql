@@ -33,6 +33,8 @@ create function should_replicate(src) as
   and self_status(src) is distinct from 'declined'
 ;
 
-create function as_replica_from(event_id, cal_id) as md5(cal_id) || md5(event_id);
+create function as_replica_from(event_id, cal_id) as 'replica' || md5(cal_id) || md5(event_id);
 
-create function is_replica_from(event_id, cal_id) as event_id like md5(cal_id) || '%';
+create function is_replica(event_id) as event_id like 'replica%';
+
+create function is_replica_from(event_id, cal_id) as event_id like 'replica' || md5(cal_id) || '%';
