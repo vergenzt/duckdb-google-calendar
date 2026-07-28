@@ -45,7 +45,7 @@ create temporary view src_replicated as
     getenv('REPLICA_COLOR_ID') as color_id,
     '' as description,
 
-    lower(summary) similar to '.*\b(therapy|counseling|appointment)\b.*' as is_medical,
+    lower(summary) similar to '.*\b(therapy|counseling|appointment|consult)\b.*' as is_medical,
 
     '[Personal] ' || coalesce(
       case when is_medical then 'Appointment' end,
