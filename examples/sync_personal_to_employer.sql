@@ -38,14 +38,21 @@ create function extend_bounded(val, extend_by, bound_val) as
 
 -- business hours are evaluated in host's local time zone
 create temporary view src_replicated as
-  from calendar.src
+  from (
+    from calendar.src
+    select
+      *,
+      lower(summary) similar to '.*\b(therap(y|ist)|counseling|appointment|consult)\b.*' as is_medical,
+      date_trunc('day', start) + interval '08 hours' as workday_start,
+      date_trunc('day', start) + interval '17 hours' - interval '1 second' as workday_end,
+  ) as src
 
   select
     event_id.as_replica_from(calendar_id) as event_id,
     getenv('REPLICA_COLOR_ID') as color_id,
-    '' as description,
 
-    lower(summary) similar to '.*\b(therapy|counseling|appointment|consult)\b.*' as is_medical,
+    'private' as visibility,
+    transparency,
 
     '[Personal] ' || coalesce(
       case when is_medical then 'Appointment' end,
@@ -76,9 +83,6 @@ create temporary view src_replicated as
     else
       "end"
     end as "end",
-
-    date_trunc('day', start) + interval '08 hours' as workday_start,
-    date_trunc('day', start) + interval '17 hours' - interval '1 second' as workday_end
 
   where
     should_replicate(src)

@@ -16,9 +16,13 @@ create temporary view src_replicated as
       summary.regexp_replace('^((?:(?:Prep|Feedback): )?Interview) .*', '\1')
     )
     end as summary,
-    '' as description,
-    start as start,
-    "end" as "end",
+
+    visibility,
+    transparency,
+
+    start,
+    "end",
+
   where
     should_replicate(src)
     and not event_id.is_replica_from(getvariable('dst_cal_id'))

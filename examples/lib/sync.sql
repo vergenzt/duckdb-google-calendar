@@ -6,29 +6,8 @@ merge into calendar.dst
 using src_replicated
   on dst.event_id = src_replicated.event_id
 
-  when not matched then insert (event_id, summary, description, start, "end", color_id)
-    values (
-      src_replicated.event_id,
-      src_replicated.summary,
-      src_replicated.description,
-      src_replicated.start,
-      src_replicated."end",
-      src_replicated.color_id,
-    )
-
-  when matched and list_bool_or([
-    dst.summary is distinct from src_replicated.summary,
-    dst.description is distinct from src_replicated.description,
-    dst.start is distinct from src_replicated.start,
-    dst."end" is distinct from src_replicated."end",
-    dst.color_id is distinct from src_replicated.color_id,
-  ])
-  then update set
-    summary = src_replicated.summary,
-    description = src_replicated.description,
-    start = src_replicated.start,
-    "end" = src_replicated."end",
-    color_id = src_replicated.color_id,
+  when not matched then insert by name
+  when matched then update by name
 
   when not matched by source
   and dst.event_id.is_replica_from(getvariable('src_cal_id'))
