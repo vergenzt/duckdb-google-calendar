@@ -31,6 +31,7 @@ create function self_status(src) as
 create function should_replicate(src) as
   src.status is distinct from 'cancelled'
   and self_status(src) is distinct from 'declined'
+  and not src.all_day
 ;
 
 create function as_replica_from(event_id, cal_id) as 'replica' || md5(cal_id) || md5(event_id);

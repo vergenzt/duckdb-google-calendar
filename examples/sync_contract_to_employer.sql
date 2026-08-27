@@ -18,7 +18,6 @@ create temporary view src_replicated as
   where
     should_replicate(src)
     and not event_id.is_replica_from(getvariable('dst_cal_id'))
-    and not all_day
 ;
 
 .read examples/lib/sync.sql
