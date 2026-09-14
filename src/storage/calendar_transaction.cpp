@@ -19,6 +19,11 @@ CalendarTransaction &CalendarTransaction::Get(ClientContext &context, Catalog &c
 }
 
 gcal::GoogleCalendarClient &CalendarTransaction::GetClient(ClientContext &context) {
+	// Without this lock two threads racing the `if (!client)` check would both construct, and the
+	// second's assignment would destroy the first's GoogleCalendarClient while that thread was still
+	// using it -- leaving its BaseResource::headers reference dangling, which showed up as a hang
+	// spinning inside std::map copy-assignment rather than a clean crash.
+	std::lock_guard<std::mutex> guard(client_lock);
 	if (!client) {
 		http = gcal::CreateHttpClient(context);
 		auth = gcal::CreateAuthFromSecret(context, *http, calendar_catalog.GetSecretName());

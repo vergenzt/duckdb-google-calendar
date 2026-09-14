@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <vector>
 
 #include "calendar/transport/http_client.hpp"
@@ -14,6 +15,7 @@ public:
 	void AddResponse(HttpResponse response);
 
 private:
+	std::mutex lock; // responses are consumed from DuckDB executor threads, which may run concurrently
 	size_t responseIndex = 0;
 	std::vector<HttpResponse> responses;
 };

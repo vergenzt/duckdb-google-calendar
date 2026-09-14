@@ -5,6 +5,7 @@ namespace duckdb {
 namespace gcal {
 
 HttpResponse MockHttpClient::Execute(const HttpRequest &request) {
+	std::lock_guard<std::mutex> guard(lock);
 	if (responseIndex < responses.size()) {
 		return responses[responseIndex++];
 	}
@@ -12,6 +13,7 @@ HttpResponse MockHttpClient::Execute(const HttpRequest &request) {
 }
 
 void MockHttpClient::AddResponse(HttpResponse response) {
+	std::lock_guard<std::mutex> guard(lock);
 	responses.push_back(std::move(response));
 }
 } // namespace gcal
