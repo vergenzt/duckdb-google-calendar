@@ -16,7 +16,6 @@ CalendarDelete::CalendarDelete(PhysicalPlan &physical_plan, vector<LogicalType> 
 class CalendarDeleteGlobalSinkState : public GlobalSinkState {
 public:
 	gcal::GoogleCalendarClient *client = nullptr;
-	string calendar_id;
 	vector<string> names; // schema column index -> column name (only needed for RETURNING)
 	idx_t delete_count = 0;
 	vector<vector<Value>> returned; // RETURNING: one full-schema row per deleted event
@@ -26,7 +25,6 @@ unique_ptr<GlobalSinkState> CalendarDelete::GetGlobalSinkState(ClientContext &co
 	auto state = make_uniq<CalendarDeleteGlobalSinkState>();
 	auto &transaction = CalendarTransaction::Get(context, table.ParentCatalog());
 	state->client = &transaction.GetClient(context);
-	state->calendar_id = table.GetCalendarId();
 	if (return_chunk) {
 		for (auto &col : table.GetColumns().Logical()) {
 			state->names.push_back(col.Name());
@@ -43,14 +41,17 @@ SinkResultType CalendarDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 		if (id_val.IsNull()) {
 			continue;
 		}
-		string id = id_val.ToString();
+		// The rowid packs the owning calendar alongside the event id; both are needed to address the
+		// event, since `events` spans every calendar.
+		string calendar_id, id;
+		gcal_map::UnpackRowId(id_val.ToString(), calendar_id, id);
 		// RETURNING must report the deleted rows; the child only carries the row id, so fetch the
 		// event body before removing it.
 		if (return_chunk) {
-			auto event = gstate.client->Events(gstate.calendar_id).Get(id);
-			gstate.returned.push_back(gcal_map::EventToRow(event, gstate.names, gstate.calendar_id));
+			auto event = gstate.client->Events(calendar_id).Get(id);
+			gstate.returned.push_back(gcal_map::EventToRow(event, gstate.names, calendar_id));
 		}
-		gstate.client->Events(gstate.calendar_id).Delete(id);
+		gstate.client->Events(calendar_id).Delete(id);
 		gstate.delete_count++;
 	}
 	return SinkResultType::NEED_MORE_INPUT;

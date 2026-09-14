@@ -10,7 +10,7 @@ resource "google_project_service" "calendar" {
 }
 
 # The identity the DuckDB extension authenticates as. It owns its own Google
-# Calendar (cal.primary), which is what the test suite reads from / writes to.
+# Calendar (the is_primary row of cal.calendars), which the test suite reads from / writes to.
 #
 # NOTE: the JSON key is deliberately NOT managed here. The `google_service_account_key`
 # resource always persists the private key into Terraform/OpenTofu state, which we

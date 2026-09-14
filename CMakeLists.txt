@@ -49,7 +49,8 @@ set(EXTENSION_SOURCES
     src/storage/calendar_insert.cpp
     src/storage/calendar_update.cpp
     src/storage/calendar_delete.cpp
-    src/storage/calendar_merge.cpp)
+    src/storage/calendar_merge.cpp
+    src/storage/calendars_dml.cpp)
 
 # Warn on unused/dead code (GCC/Clang only)
 add_compile_options($<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wunused-function>)

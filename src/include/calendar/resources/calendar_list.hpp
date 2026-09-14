@@ -14,6 +14,10 @@ public:
 	    : BaseResource(http, headers, baseUrl) {};
 
 	CalendarListResponse List(const std::string &pageToken = "");
+
+	// One entry (GET /users/me/calendarList/{id}). Used by DELETE ... RETURNING, which must report the
+	// row before it disappears.
+	CalendarListEntry Get(const std::string &calendarId);
 };
 
 } // namespace gcal

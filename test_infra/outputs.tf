@@ -1,5 +1,5 @@
 output "service_account_email" {
-  description = "Email of the test service account. Its primary calendar is what you query as cal.primary; pass this to `gcloud iam service-accounts keys create`."
+  description = "Email of the test service account. Its primary calendar is the is_primary row of cal.calendars; pass this to `gcloud iam service-accounts keys create`."
   value       = google_service_account.test.email
 }
 

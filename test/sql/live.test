@@ -6,7 +6,7 @@ require google_calendar
 
 require-env GOOGLE_CALENDAR_ACCESS_TOKEN
 
-# The primary calendar's table is named by its ID, which is the account's email address.
+# The calendar to scope the single-calendar assertions to (an id, e.g. the account's email address).
 require-env GOOGLE_CALENDAR_PRIMARY_ID
 
 statement ok
@@ -15,23 +15,51 @@ CREATE SECRET gcal_live (TYPE google_calendar, PROVIDER access_token, token '${G
 statement ok
 ATTACH 'primary' AS cal (TYPE google_calendar, SECRET gcal_live);
 
-# Bounded read (an explicit time bound on start is required)
+# The catalog exposes exactly two tables regardless of how many calendars the account has.
 query I
-SELECT count(*) >= 0 FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}"
-WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00';
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'cal' ORDER BY table_name;
+----
+calendars
+events
+
+# --- calendars ---
+
+# calendarList is enumerable without any filter, and includes the calendar under test.
+query I
+SELECT count(*) FROM cal.calendars WHERE calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}';
+----
+1
+
+# Typed projection of the calendars schema.
+query I
+SELECT count(*) >= 1 FROM cal.calendars
+WHERE (summary IS NULL OR typeof(summary) = 'VARCHAR')
+  AND (is_primary IS NULL OR typeof(is_primary) = 'BOOLEAN')
+  AND (selected IS NULL OR typeof(selected) = 'BOOLEAN');
 ----
 true
 
-# Unbounded read is rejected
+# --- events ---
+
+# Bounded read scoped to one calendar (an explicit time bound on start is required).
+query I
+SELECT count(*) >= 0 FROM cal.events
+WHERE calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}'
+  AND start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00';
+----
+true
+
+# Unbounded read is rejected.
 statement error
-SELECT * FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}";
+SELECT * FROM cal.events;
 ----
 explicit time bound
 
 # The extended fields (visibility, transparency, and friends) are selectable and correctly typed.
 query I
-SELECT count(*) >= 0 FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}"
-WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00'
+SELECT count(*) >= 0 FROM cal.events
+WHERE calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}'
+  AND start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00'
   AND (visibility IS NULL OR typeof(visibility) = 'VARCHAR')
   AND (transparency IS NULL OR typeof(transparency) = 'VARCHAR')
   AND (locked IS NULL OR typeof(locked) = 'BOOLEAN')
@@ -39,36 +67,118 @@ WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '202
 ----
 true
 
-# calendar_id is a hidden virtual column: selectable by name, and equal to the calendar's ID for
-# every row (count of mismatches is 0, which also holds when the window has no events).
+# calendar_id is a real, projected column (it leads SELECT *) and a `calendar_id = ...` predicate
+# narrows the scan to that calendar, so no row can come back from another one.
 query I
-SELECT count(*) FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}"
-WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00'
+SELECT count(*) FROM cal.events
+WHERE calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}'
+  AND start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00'
   AND calendar_id <> '${GOOGLE_CALENDAR_PRIMARY_ID}';
 ----
 0
 
-# ... but excluded from SELECT * (no calendar_id column in the result).
-statement error
-SELECT calendar_id FROM (SELECT * FROM cal."${GOOGLE_CALENDAR_PRIMARY_ID}"
-WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00');
+query I
+SELECT calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}' FROM (
+  SELECT * FROM cal.events
+  WHERE calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}'
+    AND start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00'
+  LIMIT 0
+);
 ----
-calendar_id
 
-# calendar_aliases mounts the primary calendar under its alias only.
+# Every event joins back to the calendars table on calendar_id — the two tables share a key.
+query I
+SELECT count(*) FROM cal.events e
+ANTI JOIN cal.calendars c USING (calendar_id)
+WHERE e.start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND e.start < TIMESTAMPTZ '2020-01-08 00:00:00+00';
+----
+0
+
+# --- fixed table set ---
+
+statement error
+CREATE TABLE cal.another AS FROM cal.events WHERE false;
+----
+fixed table set
+
+statement error
+DROP TABLE cal.events;
+----
+fixed table set
+
+# --- write round-trip on a throwaway calendar ---
+# INSERT INTO calendars is the create path; only calendars created here may be deleted again.
+
 statement ok
-ATTACH 'primary' AS aliased (TYPE google_calendar, SECRET gcal_live,
-    calendar_aliases MAP {'mine': '${GOOGLE_CALENDAR_PRIMARY_ID}'});
+INSERT INTO cal.calendars (summary, time_zone) VALUES ('duckdb-gcal-live-test', 'UTC');
+
+statement ok
+CREATE TEMP TABLE scratch AS
+  SELECT calendar_id FROM cal.calendars WHERE summary = 'duckdb-gcal-live-test';
 
 query I
-SELECT count(*) >= 0 FROM aliased.mine
-WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00';
+SELECT count(*) FROM scratch;
 ----
-true
+1
 
-# The ID-named table is gone once aliased.
-statement error
-SELECT * FROM aliased."${GOOGLE_CALENDAR_PRIMARY_ID}"
-WHERE start >= TIMESTAMPTZ '2020-01-01 00:00:00+00' AND start < TIMESTAMPTZ '2020-01-08 00:00:00+00';
+# INSERT routes by the row's calendar_id.
+statement ok
+INSERT INTO cal.events (calendar_id, event_id, summary, start, "end")
+SELECT calendar_id, 'duckdblivetest01', 'Standup',
+       TIMESTAMPTZ '2026-06-10 09:00:00+00', TIMESTAMPTZ '2026-06-10 09:15:00+00'
+FROM scratch;
+
+query II
+SELECT summary, all_day FROM cal.events
+WHERE calendar_id = (SELECT calendar_id FROM scratch)
+  AND start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00';
 ----
-does not exist
+Standup	false
+
+# UPDATE keys off the packed rowid, so it finds the owning calendar on its own.
+statement ok
+UPDATE cal.events SET location = 'Room 4'
+WHERE calendar_id = (SELECT calendar_id FROM scratch)
+  AND start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00';
+
+query I
+SELECT location FROM cal.events
+WHERE calendar_id = (SELECT calendar_id FROM scratch)
+  AND start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00';
+----
+Room 4
+
+# calendar_id identifies the owning calendar and cannot be reassigned.
+statement error
+UPDATE cal.events SET calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}'
+WHERE calendar_id = (SELECT calendar_id FROM scratch)
+  AND start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00';
+----
+calendar_id cannot be updated
+
+statement ok
+DELETE FROM cal.events
+WHERE calendar_id = (SELECT calendar_id FROM scratch)
+  AND start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00';
+
+query I
+SELECT count(*) FROM cal.events
+WHERE calendar_id = (SELECT calendar_id FROM scratch)
+  AND start >= TIMESTAMPTZ '2026-06-01 00:00:00+00' AND start < TIMESTAMPTZ '2026-07-01 00:00:00+00';
+----
+0
+
+# A calendar the session did not create is protected from deletion.
+statement error
+DELETE FROM cal.calendars WHERE calendar_id = '${GOOGLE_CALENDAR_PRIMARY_ID}';
+----
+refusing to delete calendar
+
+# ...but the throwaway one can be cleaned up.
+statement ok
+DELETE FROM cal.calendars WHERE calendar_id = (SELECT calendar_id FROM scratch);
+
+query I
+SELECT count(*) FROM cal.calendars WHERE summary = 'duckdb-gcal-live-test';
+----
+0

@@ -39,7 +39,7 @@ create function extend_bounded(val, extend_by, bound_val) as
 -- business hours are evaluated in host's local time zone
 create temporary view src_replicated as
   from (
-    from calendar.src
+    from src
     select
       *,
       lower(summary) similar to '.*\b(therap(y|ist)|counseling|appointment|consult)\b.*' as is_medical,
@@ -48,7 +48,8 @@ create temporary view src_replicated as
   ) as src
 
   select
-    event_id.as_replica_from(calendar_id) as event_id,
+    getvariable('dst_cal_id') as calendar_id,
+    event_id.as_replica_from(src.calendar_id) as event_id,
     getenv('REPLICA_COLOR_ID') as color_id,
 
     'private' as visibility,

@@ -17,7 +17,6 @@ CalendarInsert::CalendarInsert(PhysicalPlan &physical_plan, vector<LogicalType> 
 class CalendarInsertGlobalSinkState : public GlobalSinkState {
 public:
 	gcal::GoogleCalendarClient *client = nullptr;
-	string calendar_id;
 	vector<string> names; // chunk column index -> schema column name
 	idx_t insert_count = 0;
 	vector<vector<Value>> returned; // RETURNING: one full-schema row per inserted event
@@ -27,7 +26,6 @@ unique_ptr<GlobalSinkState> CalendarInsert::GetGlobalSinkState(ClientContext &co
 	auto state = make_uniq<CalendarInsertGlobalSinkState>();
 	auto &transaction = CalendarTransaction::Get(context, table.ParentCatalog());
 	state->client = &transaction.GetClient(context);
-	state->calendar_id = table.GetCalendarId();
 	for (auto &col : table.GetColumns().Logical()) {
 		state->names.push_back(col.Name());
 	}
@@ -38,22 +36,24 @@ SinkResultType CalendarInsert::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &gstate = input.global_state.Cast<CalendarInsertGlobalSinkState>();
 	chunk.Flatten();
 	for (idx_t row = 0; row < chunk.size(); row++) {
+		// `events` spans every calendar, so the destination comes from the row rather than the table.
+		auto calendar_id = gcal_map::RowCalendarId(chunk, row, gstate.names);
 		auto event = gcal_map::RowToEvent(chunk, row, gstate.names);
 		nlohmann::json created;
 		try {
-			created = gstate.client->Events(gstate.calendar_id).Insert(event);
+			created = gstate.client->Events(calendar_id).Insert(event);
 		} catch (const gcal::CalendarApiException &e) {
 			// 409 = the id already exists server-side: either a replica living outside the scan window,
 			// or a deleted event whose id Google reserves for months (events.insert can't reuse it). The
 			// MERGE saw "not matched" only because events.list hides both cases. events.update (PUT)
 			// overwrites/resurrects in place, turning this insert into an upsert against the reserved id.
 			if (e.GetStatusCode() == 409 && event.contains("id")) {
-				created = gstate.client->Events(gstate.calendar_id).Update(event["id"].get<string>(), event);
+				created = gstate.client->Events(calendar_id).Update(event["id"].get<string>(), event);
 			} else {
 				auto id = event.contains("id") ? event["id"].get<string>() : string("(server-assigned)");
 				throw IOException("google_calendar: events.insert failed for event_id=%s on calendar %s: %s\n"
 				                  "request body: %s",
-				                  id, gstate.calendar_id, e.what(), event.dump());
+				                  id, calendar_id, e.what(), event.dump());
 			}
 		} catch (const std::exception &e) {
 			// Surface which event failed: the client-supplied id and full request body are otherwise
@@ -61,11 +61,11 @@ SinkResultType CalendarInsert::Sink(ExecutionContext &context, DataChunk &chunk,
 			auto id = event.contains("id") ? event["id"].get<string>() : string("(server-assigned)");
 			throw IOException("google_calendar: events.insert failed for event_id=%s on calendar %s: %s\n"
 			                  "request body: %s",
-			                  id, gstate.calendar_id, e.what(), event.dump());
+			                  id, calendar_id, e.what(), event.dump());
 		}
 		gstate.insert_count++;
 		if (return_chunk) {
-			gstate.returned.push_back(gcal_map::EventToRow(created, gstate.names, gstate.calendar_id));
+			gstate.returned.push_back(gcal_map::EventToRow(created, gstate.names, calendar_id));
 		}
 	}
 	return SinkResultType::NEED_MORE_INPUT;

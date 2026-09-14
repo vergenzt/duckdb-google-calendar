@@ -9,7 +9,7 @@ class CalendarSchemaEntry : public SchemaCatalogEntry {
 public:
 	CalendarSchemaEntry(Catalog &catalog, CreateSchemaInfo &info);
 
-	// Called by attach-time enumeration (Slice 6) to register one events table per calendar.
+	// Called by CalendarCatalog::LoadCatalog to register the two fixed tables (calendars, events).
 	void AddTable(unique_ptr<CatalogEntry> table);
 
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;

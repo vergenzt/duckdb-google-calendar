@@ -3,7 +3,7 @@
 Provisions a throwaway Google **service account** for testing the
 `duckdb-google-calendar` extension's `key_file` provider. The extension
 authenticates *as* the service account and reads/writes the service account's
-**own** Google Calendar (`cal.primary`) — so there is **no calendar to share**
+**own** Google Calendar — so there is **no calendar to share**
 and no manual Console clicking beyond initial auth.
 
 What it manages:
@@ -62,13 +62,19 @@ key (GCP caps a service account at 10 keys).
 CREATE SECRET cal (TYPE google_calendar, PROVIDER key_file, filepath '/abs/path/test_infra/sa.json');
 ATTACH 'me' AS cal (TYPE google_calendar, SECRET cal);
 
--- cal.primary is the SERVICE ACCOUNT's own calendar (starts empty):
-INSERT INTO cal.primary (summary, start, "end")
-VALUES ('Smoke test', TIMESTAMPTZ '2026-06-10 09:00-04', TIMESTAMPTZ '2026-06-10 09:15-04');
+-- The catalog always exposes exactly two tables: cal.calendars and cal.events.
+-- The service account's own calendar (which starts empty) is the primary one:
+CREATE TEMP TABLE me AS SELECT calendar_id FROM cal.calendars WHERE is_primary;
 
-SELECT id, summary, start, "end" FROM cal.primary
-WHERE start >= TIMESTAMPTZ '2026-06-01 00:00-04'
-  AND start <  TIMESTAMPTZ '2026-07-01 00:00-04';
+INSERT INTO cal.events (calendar_id, summary, start, "end")
+SELECT calendar_id, 'Smoke test',
+       TIMESTAMPTZ '2026-06-10 09:00:00-04', TIMESTAMPTZ '2026-06-10 09:15:00-04'
+FROM me;
+
+SELECT event_id, summary, start, "end" FROM cal.events
+WHERE calendar_id = (SELECT calendar_id FROM me)
+  AND start >= TIMESTAMPTZ '2026-06-01 00:00:00-04'
+  AND start <  TIMESTAMPTZ '2026-07-01 00:00:00-04';
 ```
 
 ## Storing the key in 1Password (no file on disk)

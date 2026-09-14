@@ -21,7 +21,6 @@ CalendarUpdate::CalendarUpdate(PhysicalPlan &physical_plan, vector<LogicalType> 
 class CalendarUpdateGlobalSinkState : public GlobalSinkState {
 public:
 	gcal::GoogleCalendarClient *client = nullptr;
-	string calendar_id;
 	vector<string> names; // schema column index -> column name
 	idx_t update_count = 0;
 	vector<vector<Value>> returned; // RETURNING: one full-schema row per updated event
@@ -31,7 +30,6 @@ unique_ptr<GlobalSinkState> CalendarUpdate::GetGlobalSinkState(ClientContext &co
 	auto state = make_uniq<CalendarUpdateGlobalSinkState>();
 	auto &transaction = CalendarTransaction::Get(context, table.ParentCatalog());
 	state->client = &transaction.GetClient(context);
-	state->calendar_id = table.GetCalendarId();
 	for (auto &col : table.GetColumns().Logical()) {
 		state->names.push_back(col.Name());
 	}
@@ -48,8 +46,11 @@ SinkResultType CalendarUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		if (id_val.IsNull()) {
 			continue;
 		}
-		string id = id_val.ToString();
-		json event = gstate.client->Events(gstate.calendar_id).Get(id);
+		// The rowid packs the owning calendar alongside the event id; both are needed to address the
+		// event, since `events` spans every calendar.
+		string calendar_id, id;
+		gcal_map::UnpackRowId(id_val.ToString(), calendar_id, id);
+		json event = gstate.client->Events(calendar_id).Get(id);
 
 		bool all_day = gcal_map::ExistingAllDay(event);
 		for (idx_t c = 0; c < columns.size(); c++) {
@@ -67,13 +68,13 @@ SinkResultType CalendarUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 			if (return_chunk) {
 				gcal_map::ApplyColumn(event, name, val, all_day, /*update=*/true);
 			} else {
-				gcal_map::ApplySet(event, name, val, all_day);
+				gcal_map::ApplySet(event, name, val, all_day, calendar_id);
 			}
 		}
-		auto updated = gstate.client->Events(gstate.calendar_id).Update(id, event);
+		auto updated = gstate.client->Events(calendar_id).Update(id, event);
 		gstate.update_count++;
 		if (return_chunk) {
-			gstate.returned.push_back(gcal_map::EventToRow(updated, gstate.names, gstate.calendar_id));
+			gstate.returned.push_back(gcal_map::EventToRow(updated, gstate.names, calendar_id));
 		}
 	}
 	return SinkResultType::NEED_MORE_INPUT;

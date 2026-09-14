@@ -10,8 +10,7 @@ using json = nlohmann::json;
 namespace duckdb {
 namespace gcal {
 
-CalendarListEntry CalendarsResource::Insert(const std::string &summary) {
-	json body = {{"summary", summary}};
+CalendarListEntry CalendarsResource::Insert(const json &body) {
 	return ParseResponse<CalendarListEntry>(DoPost("/calendars", body.dump()));
 }
 

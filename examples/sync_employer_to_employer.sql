@@ -5,7 +5,7 @@ set variable dst_cal_id = getenv('EMPLOYER_CALENDAR_ID');
 create temporary view src_replicated as
 
   with interviews as (
-    from calendar.src
+    from src
     where
       should_replicate(src)
       and not event_id.is_replica_from(getvariable('dst_cal_id'))
@@ -18,7 +18,8 @@ create temporary view src_replicated as
   from (
     from interviews
     select
-      md5(calendar_id) || md5('prep-for-' || event_id) as event_id,
+      getvariable('dst_cal_id') as calendar_id,
+      md5(interviews.calendar_id) || md5('prep-for-' || event_id) as event_id,
       color_id as color_id,
       'Prep: ' || summary as summary,
       start - interval '30 minutes' as start,
@@ -29,7 +30,8 @@ create temporary view src_replicated as
 
     from interviews
     select
-      md5(calendar_id) || md5('feedback-for-' || event_id) as event_id,
+      getvariable('dst_cal_id') as calendar_id,
+      md5(interviews.calendar_id) || md5('feedback-for-' || event_id) as event_id,
       color_id as color_id,
       'Feedback: ' || summary as summary,
       "end" as start,

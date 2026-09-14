@@ -5,6 +5,7 @@
 #include "storage/calendar_insert.hpp"
 #include "storage/calendar_update.hpp"
 #include "storage/calendar_delete.hpp"
+#include "storage/calendars_dml.hpp"
 
 #include "duckdb/parser/parsed_data/create_schema_info.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
@@ -42,10 +43,13 @@ CalendarCatalog::CalendarCatalog(AttachedDatabase &db, string path, string secre
 CalendarCatalog::~CalendarCatalog() = default;
 
 void CalendarCatalog::Initialize(bool load_builtin) {
-	// Schema container is built in the constructor; per-calendar tables are added by LoadCatalog.
+	// Schema container is built in the constructor; the two tables are added by LoadCatalog.
 }
 
 void CalendarCatalog::LoadCatalog(ClientContext &context) {
+	// Resolve the credential now so a bad or missing secret fails at ATTACH rather than at the first
+	// query. No calendar enumeration happens here: the table set is fixed, and each scan re-reads the
+	// calendar list so newly created/shared calendars show up without re-ATTACH.
 	auto http = gcal::CreateHttpClient(context);
 	auto auth = gcal::CreateAuthFromSecret(context, *http, secret_name);
 	if (!auth) {
@@ -53,42 +57,14 @@ void CalendarCatalog::LoadCatalog(ClientContext &context) {
 		    "No google_calendar secret found. Create one with CREATE SECRET (TYPE google_calendar, ...) "
 		    "or pass SECRET <name> to ATTACH.");
 	}
-	gcal::GoogleCalendarClient client(*http, *auth);
 
-	// Invert alias -> calendar ID into calendar ID -> [aliases], since one calendar ID may carry
-	// several aliases and each becomes its own mounted table.
-	case_insensitive_map_t<vector<string>> aliases_by_id;
-	for (auto &alias : calendar_aliases) {
-		aliases_by_id[alias.second].push_back(alias.first);
-	}
+	CreateTableInfo calendars_info(*main_schema, CALENDARS_TABLE_NAME);
+	AddCalendarsColumns(calendars_info.columns);
+	main_schema->AddTable(make_uniq<CalendarsTableEntry>(*this, *main_schema, calendars_info));
 
-	case_insensitive_set_t seen_ids;
-	string page_token;
-	do {
-		auto response = client.CalendarList().List(page_token);
-		for (auto &cal : response.items) {
-			seen_ids.insert(cal.id);
-			// Calendar IDs are globally unique, so they serve directly as table names, unless one or
-			// more aliases were supplied at ATTACH, in which case the calendar is mounted only under
-			// each of them.
-			auto it = aliases_by_id.find(cal.id);
-			vector<string> table_names = it != aliases_by_id.end() ? it->second : vector<string> {cal.id};
-			for (auto &table_name : table_names) {
-				CreateTableInfo info(*main_schema, table_name);
-				AddEventsColumns(info.columns);
-				auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, cal.id);
-				main_schema->AddTable(std::move(entry));
-			}
-		}
-		page_token = response.nextPageToken;
-	} while (!page_token.empty());
-
-	// Fail eagerly if an alias points at a calendar ID that doesn't exist.
-	for (auto &alias : calendar_aliases) {
-		if (seen_ids.find(alias.second) == seen_ids.end()) {
-			throw InvalidInputException("calendar_aliases refers to unknown calendar ID \"%s\"", alias.second);
-		}
-	}
+	CreateTableInfo events_info(*main_schema, EVENTS_TABLE_NAME);
+	AddEventsColumns(events_info.columns);
+	main_schema->AddTable(make_uniq<EventsTableEntry>(*this, *main_schema, events_info));
 }
 
 optional_ptr<CatalogEntry> CalendarCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
@@ -114,27 +90,9 @@ void CalendarCatalog::ScanSchemas(ClientContext &context, std::function<void(Sch
 
 PhysicalOperator &CalendarCatalog::PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner,
                                                      LogicalCreateTable &op, PhysicalOperator &plan) {
-	auto &create_info = op.info->Base();
-
-	// The events schema is fixed, so the query must yield exactly those columns.
-	ValidateEventsColumns(create_info.columns);
-
-	// Create the calendar in Google (POST /calendars); the table name becomes its summary.
-	auto &transaction = CalendarTransaction::Get(context, *this);
-	auto created = transaction.GetClient(context).Calendars().Insert(create_info.table);
-
-	// Register it as a live table so it's queryable without re-ATTACH.
-	CreateTableInfo info(*main_schema, create_info.table);
-	AddEventsColumns(info.columns);
-	auto entry = make_uniq<CalendarTableEntry>(*this, *main_schema, info, created.id);
-	auto &table_entry = *entry;
-	main_schema->AddTable(std::move(entry));
-	MarkCreatedThisSession(created.id);
-
-	// Insert the query's rows into the new calendar (none for `... AS FROM x WHERE false`).
-	auto &insert = planner.Make<CalendarInsert>(op.types, table_entry, op.estimated_cardinality, false);
-	insert.children.push_back(plan);
-	return insert;
+	throw NotImplementedException(
+	    "google_calendar: the catalog has a fixed table set (calendars, events); CREATE TABLE is not "
+	    "supported. Create a calendar with INSERT INTO calendars (summary) VALUES ('...').");
 }
 
 PhysicalOperator &CalendarCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
@@ -143,6 +101,11 @@ PhysicalOperator &CalendarCatalog::PlanInsert(ClientContext &context, PhysicalPl
 	reference<PhysicalOperator> child = *plan;
 	if (!op.column_index_map.empty()) {
 		child = planner.ResolveDefaultsProjection(op, *plan);
+	}
+	if (table.name == CALENDARS_TABLE_NAME) {
+		auto &insert = planner.Make<CalendarsInsert>(op.types, table, op.estimated_cardinality, op.return_chunk);
+		insert.children.push_back(child);
+		return insert;
 	}
 	auto &insert = planner.Make<CalendarInsert>(op.types, table, op.estimated_cardinality, op.return_chunk);
 	insert.children.push_back(child);
@@ -153,6 +116,12 @@ PhysicalOperator &CalendarCatalog::PlanDelete(ClientContext &context, PhysicalPl
                                               PhysicalOperator &plan) {
 	auto &table = op.table.Cast<CalendarTableEntry>();
 	auto &bound_ref = op.expressions[0]->Cast<BoundReferenceExpression>();
+	if (table.name == CALENDARS_TABLE_NAME) {
+		auto &del =
+		    planner.Make<CalendarsDelete>(op.types, table, bound_ref.index, op.estimated_cardinality, op.return_chunk);
+		del.children.push_back(plan);
+		return del;
+	}
 	auto &del = planner.Make<CalendarDelete>(op.types, table, bound_ref.index, op.estimated_cardinality, op.return_chunk);
 	del.children.push_back(plan);
 	return del;
@@ -161,6 +130,12 @@ PhysicalOperator &CalendarCatalog::PlanDelete(ClientContext &context, PhysicalPl
 PhysicalOperator &CalendarCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                               PhysicalOperator &plan) {
 	auto &table = op.table.Cast<CalendarTableEntry>();
+	if (table.name == CALENDARS_TABLE_NAME) {
+		// calendars.patch is a different call than the events read-modify-write PUT, and the calendarList
+		// overlay fields (selected/hidden/colors) live on a third endpoint again.
+		throw NotImplementedException("google_calendar: UPDATE on the calendars table is not supported; "
+		                              "the table is read-only apart from INSERT (create) and DELETE (remove)");
+	}
 	vector<idx_t> value_indices;
 	for (auto &expr : op.expressions) {
 		value_indices.push_back(expr->Cast<BoundReferenceExpression>().index);
@@ -174,6 +149,10 @@ PhysicalOperator &CalendarCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 PhysicalOperator &CalendarCatalog::PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,
                                                  LogicalMergeInto &op, PhysicalOperator &plan) {
 	auto &table = op.table.Cast<CalendarTableEntry>();
+	if (table.name == CALENDARS_TABLE_NAME) {
+		throw NotImplementedException("google_calendar: MERGE INTO the calendars table is not supported; "
+		                              "use INSERT INTO calendars / DELETE FROM calendars");
+	}
 
 	map<MergeActionCondition, vector<unique_ptr<MergeIntoOperator>>> actions;
 	for (auto &entry : op.actions) {

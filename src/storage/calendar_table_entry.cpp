@@ -6,24 +6,8 @@
 
 namespace duckdb {
 
-CalendarTableEntry::CalendarTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info,
-                                       string calendar_id)
-    : TableCatalogEntry(catalog, schema, info), calendar_id(std::move(calendar_id)) {
-}
-
 unique_ptr<BaseStatistics> CalendarTableEntry::GetStatistics(ClientContext &context, column_t column_id) {
 	return nullptr;
-}
-
-TableFunction CalendarTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
-	vector<string> names;
-	vector<LogicalType> types;
-	for (auto &col : GetColumns().Logical()) {
-		names.push_back(col.Name());
-		types.push_back(col.Type());
-	}
-	bind_data = MakeCalendarScanBindData(ParentCatalog(), *this, calendar_id, std::move(names), std::move(types));
-	return GetCalendarScanFunction();
 }
 
 TableStorageInfo CalendarTableEntry::GetStorageInfo(ClientContext &context) {
@@ -40,6 +24,32 @@ virtual_column_map_t CalendarTableEntry::GetVirtualColumns() const {
 	virtual_column_map_t virtual_columns;
 	virtual_columns.insert(make_pair(COLUMN_IDENTIFIER_ROW_ID, TableColumn("rowid", LogicalType::VARCHAR)));
 	return virtual_columns;
+}
+
+vector<string> CalendarTableEntry::ColumnNames() const {
+	vector<string> names;
+	for (auto &col : GetColumns().Logical()) {
+		names.push_back(col.Name());
+	}
+	return names;
+}
+
+EventsTableEntry::EventsTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info)
+    : CalendarTableEntry(catalog, schema, info) {
+}
+
+TableFunction EventsTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
+	bind_data = MakeEventsScanBindData(ParentCatalog(), *this, ColumnNames());
+	return GetEventsScanFunction();
+}
+
+CalendarsTableEntry::CalendarsTableEntry(Catalog &catalog, SchemaCatalogEntry &schema, CreateTableInfo &info)
+    : CalendarTableEntry(catalog, schema, info) {
+}
+
+TableFunction CalendarsTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data) {
+	bind_data = MakeCalendarsScanBindData(ParentCatalog(), *this, ColumnNames());
+	return GetCalendarsScanFunction();
 }
 
 } // namespace duckdb

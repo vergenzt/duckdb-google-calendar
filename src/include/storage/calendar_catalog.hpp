@@ -8,6 +8,10 @@
 namespace duckdb {
 class CalendarSchemaEntry;
 
+// Names of the two tables every attachment exposes (D15). Reserved: the catalog mounts nothing else.
+constexpr const char *CALENDARS_TABLE_NAME = "calendars";
+constexpr const char *EVENTS_TABLE_NAME = "events";
+
 class CalendarCatalog : public Catalog {
 public:
 	CalendarCatalog(AttachedDatabase &db, string path, string secret_name);
@@ -17,16 +21,14 @@ public:
 		return secret_name;
 	}
 
-	// Optional map of alias (table name) -> calendar ID. A calendar referenced by one or more aliases
-	// is mounted only under those aliases; every other calendar is mounted under its raw ID. Several
-	// aliases may point at the same calendar ID, mounting it under each name.
-	case_insensitive_map_t<string> calendar_aliases;
-
-	// Builds per-calendar tables via the Calendar API (enumeration body lands in Slice 6).
+	// Mounts the fixed `calendars` and `events` tables. Both are views over the live API, so this
+	// does no enumeration — the calendar list is fetched per scan, which keeps ATTACH cheap and makes
+	// a calendar created mid-session visible without re-ATTACH.
 	void LoadCatalog(ClientContext &context);
 
-	// Calendars created via CREATE TABLE ... AS during this attachment. DROP TABLE is allowed only for
-	// these, so a session can clean up after itself but never delete pre-existing user calendars.
+	// Calendars created via INSERT INTO calendars during this attachment. DELETE FROM calendars is
+	// allowed only for these, so a session can clean up after itself but never delete a pre-existing
+	// user calendar.
 	void MarkCreatedThisSession(const string &calendar_id) {
 		created_calendar_ids.insert(calendar_id);
 	}
@@ -36,6 +38,15 @@ public:
 	void ForgetCreatedThisSession(const string &calendar_id) {
 		created_calendar_ids.erase(calendar_id);
 	}
+
+	// Optional fixed set of calendar ids the `events` fan-out is limited to, set via ATTACH with
+	// `default_calendars`. Like default_window, it only applies when the query says nothing more
+	// specific: a `calendar_id = ...` / `IN (...)` predicate overrides it outright rather than
+	// intersecting with it, so an explicitly named calendar is always reachable. When set, scans never
+	// enumerate calendarList at all. Does not affect the `calendars` table, which always reports the
+	// account's full calendar list (that is how you discover ids, and it is a single cheap call).
+	bool has_default_calendars = false;
+	vector<string> default_calendars;
 
 	// Optional default time window, set via ATTACH with any two of {default_window_start,
 	// default_window_end, default_window_length}, or default_window_length alone. When set, a scan

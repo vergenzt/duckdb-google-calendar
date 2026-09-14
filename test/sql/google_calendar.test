@@ -10,6 +10,124 @@ CREATE SECRET gcal_smoke (TYPE google_calendar, PROVIDER access_token, token 'du
 
 # ATTACH referencing a missing secret fails fast with a clear message (no network call)
 statement error
-ATTACH 'primary' AS cal (TYPE google_calendar, SECRET does_not_exist);
+ATTACH 'primary' AS missing (TYPE google_calendar, SECRET does_not_exist);
 ----
 not found
+
+# ATTACH itself makes no API calls (the table set is fixed), so the catalog shape is checkable offline.
+statement ok
+ATTACH 'me' AS cal (TYPE google_calendar, SECRET gcal_smoke);
+
+# Exactly two tables, always.
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'cal' ORDER BY table_name;
+----
+calendars
+events
+
+# calendar_id leads the events schema: it is the routing key for reads and writes.
+query I
+SELECT column_name FROM (DESCRIBE cal.events) LIMIT 1;
+----
+calendar_id
+
+query I
+SELECT column_name FROM (DESCRIBE cal.calendars) LIMIT 1;
+----
+calendar_id
+
+# Unbounded event reads are still rejected (a fan-out over every calendar with no time bound would
+# be unboundedly expensive).
+statement error
+SELECT * FROM cal.events;
+----
+explicit time bound
+
+# The calendars table has no such requirement.
+statement ok
+PREPARE list_calendars AS SELECT calendar_id FROM cal.calendars;
+
+# The table set is fixed: no DDL creates or removes tables.
+statement error
+CREATE TABLE cal.something AS SELECT 1 AS x;
+----
+fixed table set
+
+statement error
+DROP TABLE cal.events;
+----
+fixed table set
+
+# calendars is read-only apart from INSERT (create) / DELETE (remove).
+statement error
+UPDATE cal.calendars SET summary = 'x' WHERE calendar_id = 'y';
+----
+UPDATE on the calendars table is not supported
+
+# INSERT INTO calendars validates its input before any API call.
+statement error
+INSERT INTO cal.calendars (description) VALUES ('no summary');
+----
+requires a summary
+
+statement error
+INSERT INTO cal.calendars (calendar_id, summary) VALUES ('mine', 'Mine');
+----
+assigned by Google
+
+statement error
+INSERT INTO cal.calendars (summary, access_role) VALUES ('Mine', 'owner');
+----
+read-only on INSERT INTO calendars
+
+# INSERT INTO events needs a destination calendar.
+statement error
+INSERT INTO cal.events (summary) VALUES ('no calendar');
+----
+non-NULL calendar_id
+
+# --- default_calendars (fan-out scoping) ---
+# Validation happens at ATTACH, before any API call, so it is checkable offline.
+
+statement error
+ATTACH 'me' AS bad1 (TYPE google_calendar, SECRET gcal_smoke, default_calendars []);
+----
+default_calendars is empty
+
+statement error
+ATTACH 'me' AS bad2 (TYPE google_calendar, SECRET gcal_smoke, default_calendars ['a@example.com', NULL]);
+----
+NULL calendar id
+
+statement error
+ATTACH 'me' AS bad3 (TYPE google_calendar, SECRET gcal_smoke, default_calendars ['']);
+----
+empty calendar id
+
+statement error
+ATTACH 'me' AS bad4 (TYPE google_calendar, SECRET gcal_smoke, default_calendars 123);
+----
+must be a calendar id or a LIST of them
+
+# A single id and a list are both accepted, and the option does not change the table set.
+statement ok
+ATTACH 'me' AS scoped1 (TYPE google_calendar, SECRET gcal_smoke, default_calendars 'a@example.com');
+
+statement ok
+ATTACH 'me' AS scoped2 (TYPE google_calendar, SECRET gcal_smoke,
+    default_calendars ['a@example.com', 'b@example.com']);
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'scoped2' ORDER BY table_name;
+----
+calendars
+events
+
+# Scoping the fan-out does not remove the time-bound requirement.
+statement error
+SELECT * FROM scoped2.events;
+----
+explicit time bound
+
+# Note: the "calendar_id cannot be updated" guard in ApplySet is not reachable offline — an UPDATE
+# scans first, so the time-bound error fires before any column is applied. It is covered by live.test.

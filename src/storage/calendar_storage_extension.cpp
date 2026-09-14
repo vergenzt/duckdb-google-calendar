@@ -5,11 +5,10 @@
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/types/timestamp.hpp"
-
-#include <iostream>
 
 namespace duckdb {
 
@@ -24,23 +23,45 @@ static unique_ptr<Catalog> CalendarAttach(optional_ptr<StorageExtensionInfo> sto
 
 	auto catalog = make_uniq<CalendarCatalog>(db, info.path, secret_name);
 
-	// Optional calendar_aliases: MAP(VARCHAR, VARCHAR) of alias (mounted table name) -> calendar ID.
-	auto alias_it = info.options.find("calendar_aliases");
-	if (alias_it != info.options.end()) {
-		auto &v = alias_it->second;
-		if (v.type().id() != LogicalTypeId::MAP || MapType::KeyType(v.type()).id() != LogicalTypeId::VARCHAR ||
-		    MapType::ValueType(v.type()).id() != LogicalTypeId::VARCHAR) {
-			throw BinderException("calendar_aliases must be a MAP(VARCHAR, VARCHAR) of alias -> calendar ID");
+	// Optional default_calendars: the fixed set of calendar ids the `events` fan-out is limited to when
+	// a query carries no calendar_id predicate of its own. Accepts a single id or a LIST of them:
+	//   default_calendars 'a@example.com'
+	//   default_calendars ['a@example.com', getenv('DST_CALENDAR_ID')]
+	// Scoping this way also removes the calendarList lookup from every scan.
+	auto cals_it = info.options.find("default_calendars");
+	if (cals_it != info.options.end()) {
+		auto &v = cals_it->second;
+		vector<Value> entries;
+		if (v.type().id() == LogicalTypeId::LIST) {
+			entries = ListValue::GetChildren(v);
+		} else if (v.type().id() == LogicalTypeId::VARCHAR) {
+			entries.push_back(v);
+		} else {
+			throw BinderException("default_calendars must be a calendar id or a LIST of them, e.g. "
+			                      "default_calendars ['a@example.com', 'b@group.calendar.google.com']");
 		}
-		for (auto &entry : ListValue::GetChildren(v)) {
-			auto &kv = StructValue::GetChildren(entry);
-			if (kv[1].IsNull()) {
-				std::cerr << "Warning: calendar ID for alias \""
-				          << (kv[0].IsNull() ? "NULL" : StringValue::Get(kv[0])) << "\" is null; skipping.\n";
-				continue;
+		if (entries.empty()) {
+			throw BinderException(
+			    "default_calendars is empty; omit the option entirely to scan every calendar in the account");
+		}
+		case_insensitive_set_t seen;
+		for (auto &entry : entries) {
+			// A NULL here is almost always a getenv()/getvariable() that did not resolve. Skipping it
+			// would silently shrink the scan window and quietly drop events, so refuse instead.
+			if (entry.IsNull()) {
+				throw BinderException("default_calendars contains a NULL calendar id (an unresolved "
+				                      "getenv()/getvariable()?); every entry must be a non-NULL calendar id");
 			}
-			catalog->calendar_aliases[StringValue::Get(kv[0])] = StringValue::Get(kv[1]);
+			auto id = entry.ToString();
+			if (id.empty()) {
+				throw BinderException("default_calendars contains an empty calendar id");
+			}
+			// Duplicates would scan the same calendar twice and emit each event twice.
+			if (seen.insert(id).second) {
+				catalog->default_calendars.push_back(id);
+			}
 		}
+		catalog->has_default_calendars = true;
 	}
 
 	// Optional default window that lets an unbounded scan (and thus MERGE / unqualified

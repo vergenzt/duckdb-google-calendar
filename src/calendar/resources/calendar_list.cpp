@@ -14,5 +14,9 @@ CalendarListResponse CalendarListResource::List(const std::string &pageToken) {
 	return ParseResponse<CalendarListResponse>(DoGet(path));
 }
 
+CalendarListEntry CalendarListResource::Get(const std::string &calendarId) {
+	return ParseResponse<CalendarListEntry>(DoGet("/users/me/calendarList/" + UrlEncode(calendarId)));
+}
+
 } // namespace gcal
 } // namespace duckdb

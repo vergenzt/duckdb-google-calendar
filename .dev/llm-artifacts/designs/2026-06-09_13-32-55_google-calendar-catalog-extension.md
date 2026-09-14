@@ -113,6 +113,42 @@ v1 ships a credential-free smoke test (`test/sql/google_calendar.test`) + creden
 ### D14 — MERGE in v1
 Override the non-pure `PlanMergeInto` rather than leaving it throwing; reuse the Plan{Insert,Update,Delete} operators.
 
+### D15 — Fixed two-table catalog: `calendars` + `events` (supersedes the table-per-calendar half of D6/D7)
+
+**Reverses** the "Account → one table per calendar" decision recorded in discover
+(`discover/...md:150-158`) and restated in the Summary/Requirements above. ATTACH now mounts exactly
+two tables, and `calendar_aliases` (a post-design addition, commits `8f55073`/`3d42109`/`5f3883c`) is
+removed along with the per-calendar tables it named.
+
+- `events` spans every calendar. `calendar_id` is a real leading column: the scan fans out over
+  `calendarList` (skipping `deleted` entries) and fills it per row; `calendar_id = ...` / `IN (...)`
+  is pushed down via the existing `pushdown_complex_filter` hook and, when present, replaces the
+  enumeration entirely (so an explicitly named, unsubscribed calendar is reachable). The `start`
+  bound requirement from D8 is unchanged.
+- `calendars` projects `users/me/calendarList` through the newly-typed `gcal::CalendarListEntry`.
+  Read-only except `INSERT` (calendars.insert) and `DELETE` (calendars.delete).
+- **D7 amended**: the rowid is still a single VARCHAR, but now carries
+  `"<calendar_id>\x1f<event_id>"` (`gcal_map::PackRowId`). An event id alone no longer identifies a
+  row. Multi-column row ids were rejected deliberately: `Binder::BindRowIdColumns` supports N, but
+  core's `PhysicalMergeInto` consults only the first for NULL-based match detection and
+  `LogicalUpdate::RewriteInPlaceUpdates` hardcodes "rowid is last", so packing keeps D9/D14 intact.
+- **Calendar lifecycle moved off DDL**: `CREATE TABLE ... AS` (create) and `DROP TABLE` (delete) are
+  gone — the table set is fixed — and are replaced by `INSERT INTO calendars` / `DELETE FROM
+  calendars`. The "only calendars created this session may be deleted" guard carries over verbatim.
+  `ValidateEventsColumns` is deleted with the CTAS path.
+- **`default_calendars` ATTACH option** scopes the fan-out to a fixed id set (single VARCHAR or LIST,
+  deduplicated; NULL/empty entries rejected at ATTACH since they are almost always an unresolved
+  `getenv`). Precedence in `ResolveFanOut` is: pushed-down predicate > `default_calendars` >
+  `calendarList` enumeration — a predicate *overrides* rather than intersects, mirroring how an
+  explicit `start` bound overrides `default_window`. It exists because a `MERGE` with a
+  `WHEN NOT MATCHED BY SOURCE` arm must visit every target row, so DuckDB cannot push the `ON`
+  clause's `calendar_id` predicate into the target scan (verified); scoping the attachment is the
+  only lever there. It deliberately does **not** filter the `calendars` table, which stays the full
+  account listing so ids remain discoverable.
+- `LoadCatalog` no longer enumerates at ATTACH (it only resolves the secret), so ATTACH makes no API
+  call and the catalog shape is testable without credentials; each scan re-reads `calendarList`, so a
+  calendar created mid-session is visible without re-ATTACH.
+
 ### D4a — OAuth `client_id`/`redirect_uri` from env (Slice 3 refinement)
 The gsheets port hardcodes evidence-dev's registered web-app `client_id`/`redirect_uri`. This project has no registered OAuth app, so the `oauth` provider reads `GOOGLE_CALENDAR_OAUTH_CLIENT_ID` (+ optional `GOOGLE_CALENDAR_OAUTH_REDIRECT_URI`, default `urn:ietf:wg:oauth:2.0:oob`) from the environment and raises a clear `BinderException` if unset. The `key_file` and `access_token` providers are unaffected verbatim ports. Ratified at the Slice 3 checkpoint. README (Slice 10) documents OAuth-app registration.
 

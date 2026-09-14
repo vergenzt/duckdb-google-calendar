@@ -2,13 +2,13 @@
 
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/types.hpp"
-#include "duckdb/common/string_util.hpp"
-#include "duckdb/common/exception/binder_exception.hpp"
 
 namespace duckdb {
 
 void AddEventsColumns(ColumnList &columns) {
-	// Owning calendar's id. Not a Google event field; populated by the scan (read-only).
+	// Owning calendar's id. Not a Google event field: the scan fills it from the calendar it is
+	// currently paging, and it is half of the row identity that routes UPDATE/DELETE/MERGE. Required
+	// on INSERT, since it is what selects the destination calendar.
 	columns.AddColumn(ColumnDefinition("calendar_id", LogicalType::VARCHAR));
 
 	// Core scalar fields.
@@ -66,25 +66,31 @@ void AddEventsColumns(ColumnList &columns) {
 	columns.AddColumn(ColumnDefinition("focus_time_properties", LogicalType::VARCHAR));
 }
 
-void ValidateEventsColumns(const ColumnList &columns) {
-	ColumnList expected;
-	AddEventsColumns(expected);
+void AddCalendarsColumns(ColumnList &columns) {
+	// Identity. Named calendar_id (not id) so `events JOIN calendars USING (calendar_id)` works.
+	columns.AddColumn(ColumnDefinition("calendar_id", LogicalType::VARCHAR));
 
-	if (columns.LogicalColumnCount() != expected.LogicalColumnCount()) {
-		throw BinderException(
-		    "CREATE TABLE in a google_calendar catalog must produce the events schema exactly (%llu columns), "
-		    "got %llu; try AS FROM <existing_calendar> WHERE false",
-		    expected.LogicalColumnCount(), columns.LogicalColumnCount());
-	}
-	for (idx_t i = 0; i < expected.LogicalColumnCount(); i++) {
-		auto &want = expected.GetColumn(LogicalIndex(i));
-		auto &got = columns.GetColumn(LogicalIndex(i));
-		if (!StringUtil::CIEquals(want.Name(), got.Name()) || want.Type() != got.Type()) {
-			throw BinderException("CREATE TABLE column %llu must be \"%s\" %s to match the events schema, "
-			                      "got \"%s\" %s",
-			                      i + 1, want.Name(), want.Type().ToString(), got.Name(), got.Type().ToString());
-		}
-	}
+	// Writable on INSERT (calendars.insert accepts these four).
+	columns.AddColumn(ColumnDefinition("summary", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("description", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("location", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("time_zone", LogicalType::VARCHAR));
+
+	// Per-user calendarList overlay (read-only).
+	columns.AddColumn(ColumnDefinition("summary_override", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("access_role", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("color_id", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("background_color", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("foreground_color", LogicalType::VARCHAR));
+
+	// Flags. `primary` is a SQL keyword, so the column is is_primary to keep it quote-free.
+	columns.AddColumn(ColumnDefinition("is_primary", LogicalType::BOOLEAN));
+	columns.AddColumn(ColumnDefinition("selected", LogicalType::BOOLEAN));
+	columns.AddColumn(ColumnDefinition("hidden", LogicalType::BOOLEAN));
+	columns.AddColumn(ColumnDefinition("deleted", LogicalType::BOOLEAN));
+
+	columns.AddColumn(ColumnDefinition("etag", LogicalType::VARCHAR));
+	columns.AddColumn(ColumnDefinition("kind", LogicalType::VARCHAR));
 }
 
 } // namespace duckdb

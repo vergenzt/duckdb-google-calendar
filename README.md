@@ -1,7 +1,9 @@
 # duckdb-google-calendar
 
 A DuckDB extension that exposes Google Calendar as an attachable, read/write catalog
-(`ATTACH ... (TYPE google_calendar)`), with one `events` table per calendar.
+(`ATTACH ... (TYPE google_calendar)`). Every attachment exposes exactly two tables:
+`calendars` (the account's calendar list) and `events` (every event on every one
+of those calendars, keyed by `calendar_id`).
 
 ## Build
 
@@ -92,33 +94,132 @@ is mainly for quick tests:
 ## Attach & query
 
     ATTACH 'me' AS cal (TYPE google_calendar, SECRET cal);
-    SHOW TABLES FROM cal;   -- one table per calendar (the primary calendar is cal.primary)
-    
+    SHOW TABLES FROM cal;   -- always exactly two: calendars, events
+
+    -- Which calendars can this credential see?
+    SELECT calendar_id, summary, access_role, is_primary FROM cal.calendars;
+
     -- Reads REQUIRE an explicit time bound on `start`:
-    SELECT event_id, summary, start, "end"
-    FROM cal.primary
-    WHERE start >= TIMESTAMPTZ '2026-06-01 00:00-04' AND start < TIMESTAMPTZ '2026-07-01 00:00-04';
+    SELECT calendar_id, event_id, summary, start, "end"
+    FROM cal.events
+    WHERE start >= TIMESTAMPTZ '2026-06-01 00:00:00-04'
+      AND start < TIMESTAMPTZ '2026-07-01 00:00:00-04';
+
+`events` spans every calendar, so the query above issues one `events.list` per
+calendar. Add a `calendar_id` predicate to narrow it — `calendar_id = '...'` and
+`calendar_id IN (...)` are pushed down, and the scan then hits only those
+calendars (skipping the calendar-list lookup entirely, so an explicitly named
+calendar works even if the credential is not subscribed to it):
+
+    SELECT event_id, summary, start FROM cal.events
+    WHERE calendar_id = 'you@example.com'
+      AND start >= TIMESTAMPTZ '2026-06-01 00:00:00-04'
+      AND start < TIMESTAMPTZ '2026-07-01 00:00:00-04';
+
+### Scoping an attachment to specific calendars
+
+If an attachment only ever concerns a few calendars, name them at ATTACH time with
+`default_calendars`. The `events` fan-out is then limited to those, and the
+calendar-list lookup is skipped entirely:
+
+    ATTACH 'me' AS cal (TYPE google_calendar, SECRET cal,
+      default_calendars ['you@example.com', getenv('TEAM_CALENDAR_ID')]);
+
+It takes a single id or a list, and duplicates are collapsed. Like the default
+window, it only applies when the query says nothing more specific: a
+`calendar_id` predicate **overrides** it rather than intersecting with it, so a
+calendar outside the scope is still reachable when named explicitly.
+
+This is the only way to narrow a statement whose predicate DuckDB cannot push
+down — most importantly a `MERGE` with a `WHEN NOT MATCHED BY SOURCE` arm, which
+by definition must visit every target row and so cannot use the `ON` clause to
+restrict the scan.
+
+It does **not** affect the `calendars` table, which always reports the account's
+full calendar list — that is how you discover ids, and it is a single cheap call.
+(One consequence: if the scope names a calendar you are not subscribed to, its
+events appear in `events` without a matching `calendars` row.)
+
+Because the two tables share the `calendar_id` key, joining them works as you'd expect:
+
+    SELECT c.summary AS calendar, count(*) AS events
+    FROM cal.events e JOIN cal.calendars c USING (calendar_id)
+    WHERE e.start >= TIMESTAMPTZ '2026-06-01 00:00:00-04'
+      AND e.start < TIMESTAMPTZ '2026-07-01 00:00:00-04'
+    GROUP BY 1 ORDER BY 2 DESC;
+
+> **Note:** a `TIMESTAMPTZ` literal that carries an explicit UTC offset but omits
+> seconds (`'2026-06-01 00:00-04'`) is not recognised as a time bound, and the
+> scan will reject the query as unbounded. Write the seconds
+> (`'2026-06-01 00:00:00-04'`) or drop the offset. This is a long-standing quirk,
+> not new to the two-table layout.
 
 ## Write
 
-    INSERT INTO cal.primary (summary, start, "end")
-    VALUES ('Standup', TIMESTAMPTZ '2026-06-10 09:00-04', TIMESTAMPTZ '2026-06-10 09:15-04');
-    
-    UPDATE cal.primary SET location = 'Room 4' WHERE event_id = 'abc123';
-    DELETE FROM cal.primary WHERE event_id = 'abc123';
-    
-    MERGE INTO cal.primary AS t USING staging AS s ON t.event_id = s.event_id
+`calendar_id` selects the destination calendar, so it is required on INSERT:
+
+    INSERT INTO cal.events (calendar_id, summary, start, "end")
+    VALUES ('you@example.com', 'Standup',
+            TIMESTAMPTZ '2026-06-10 09:00:00-04', TIMESTAMPTZ '2026-06-10 09:15:00-04');
+
+`UPDATE`/`DELETE`/`MERGE` find the owning calendar on their own — row identity
+carries it — so they need no `calendar_id` predicate, though adding one narrows
+the scan they run first:
+
+    UPDATE cal.events SET location = 'Room 4' WHERE event_id = 'abc123';
+    DELETE FROM cal.events WHERE event_id = 'abc123';
+
+    MERGE INTO cal.events AS t USING staging AS s
+      ON t.calendar_id = s.calendar_id AND t.event_id = s.event_id
       WHEN MATCHED THEN UPDATE SET summary = s.summary
-      WHEN NOT MATCHED THEN INSERT (summary, start, "end") VALUES (s.summary, s.start, s."end");
+      WHEN NOT MATCHED THEN INSERT (calendar_id, summary, start, "end")
+           VALUES (s.calendar_id, s.summary, s.start, s."end");
 
-## Schema & limitations
+Creating and removing calendars is `INSERT`/`DELETE` on `calendars`:
 
-Every `events` table has the following fixed columns (a raw-JSON passthrough is
-the Google JSON for that field, emitted/accepted as a VARCHAR string):
+    INSERT INTO cal.calendars (summary, time_zone) VALUES ('Scratch', 'UTC')
+      RETURNING calendar_id;
+
+    DELETE FROM cal.calendars WHERE calendar_id = '...';
+
+As a safety measure, `DELETE FROM calendars` only accepts calendars **created in
+the same session** by `INSERT INTO calendars`; anything pre-existing is refused,
+so a stray `DELETE` cannot destroy a real calendar. The table set itself is
+fixed — `CREATE TABLE`, `DROP TABLE` and `ALTER` are all rejected.
+
+## The `calendars` table
+
+Projected from `users/me/calendarList`. Only `summary`, `description`,
+`location` and `time_zone` are writable, and only on `INSERT`; `UPDATE` is not
+supported.
 
 | Column | Type | Writable | Notes |
 | --- | --- | --- | --- |
-| `calendar_id` | VARCHAR | no | Owning calendar's id; synthesized by the scan, not a Google event field |
+| `calendar_id` | VARCHAR | no | Google-assigned; the join key to `events.calendar_id` |
+| `summary` | VARCHAR | INSERT only | The calendar's name; required on INSERT |
+| `description` | VARCHAR | INSERT only | |
+| `location` | VARCHAR | INSERT only | |
+| `time_zone` | VARCHAR | INSERT only | e.g. `America/New_York` |
+| `summary_override` | VARCHAR | no | This user's private renaming of the calendar |
+| `access_role` | VARCHAR | no | `owner`/`writer`/`reader`/`freeBusyReader` |
+| `color_id` | VARCHAR | no | |
+| `background_color` | VARCHAR | no | |
+| `foreground_color` | VARCHAR | no | |
+| `is_primary` | BOOLEAN | no | Named `is_primary` because `primary` is a SQL keyword |
+| `selected` | BOOLEAN | no | Shown in the user's calendar UI |
+| `hidden` | BOOLEAN | no | |
+| `deleted` | BOOLEAN | no | Deleted entries are skipped when `events` fans out |
+| `etag` | VARCHAR | no | |
+| `kind` | VARCHAR | no | |
+
+## The `events` table
+
+Fixed columns (a raw-JSON passthrough is the Google JSON for that field,
+emitted/accepted as a VARCHAR string):
+
+| Column | Type | Writable | Notes |
+| --- | --- | --- | --- |
+| `calendar_id` | VARCHAR | INSERT only | Owning calendar's id; not a Google event field. Selects the destination on INSERT, and is half of row identity. Cannot be changed by UPDATE (setting it to its existing value is a no-op, so `UPDATE ... BY NAME` works) |
 | `event_id` | VARCHAR | INSERT only | Row identity; the `UPDATE`/`DELETE`/`MERGE` key. Client-suppliable on INSERT (base32hex, len 5–1024), otherwise server-assigned |
 | `summary` | VARCHAR | yes | |
 | `description` | VARCHAR | yes | |
@@ -162,9 +263,24 @@ the Google JSON for that field, emitted/accepted as a VARCHAR string):
 | `out_of_office_properties` | VARCHAR | no | raw-JSON passthrough |
 | `focus_time_properties` | VARCHAR | no | raw-JSON passthrough |
 
-- Row identity is the server event `event_id`; `UPDATE`/`DELETE`/`MERGE` key on it.
-- A time bound on `start` is required for reads (unbounded scans error).
-- `UPDATE` is read-modify-write (GET + PUT); `no`-writable columns above are read-only.
+## Limitations
+
+- Row identity is `(calendar_id, event_id)`; `UPDATE`/`DELETE`/`MERGE` key on it. It is carried as a
+  single VARCHAR `rowid` with the two halves separated by `0x1f`, so a rowid value is only meaningful
+  to rows produced by scanning `events`.
+- A time bound on `start` is required for reads (unbounded scans error), or set a default window at
+  ATTACH with `default_window_length` / `default_window_start` / `default_window_end`.
+- `default_calendars` bounds the fan-out for queries that carry no `calendar_id` predicate; it is the
+  only lever for statements DuckDB cannot push a predicate into.
+- An unqualified `events` scan issues one `events.list` per calendar. Filter on `calendar_id` to
+  narrow it. The predicate is pushed down from a `WHERE` clause and from a `MERGE ... ON` clause, but
+  **not** past a `WHEN NOT MATCHED BY SOURCE` arm — that requires a full target scan, so such a MERGE
+  reads every calendar.
+- `UPDATE` is read-modify-write (GET + PUT); `no`-writable columns above are read-only. Moving an
+  event between calendars is not supported (that is `events.move`); delete and re-insert instead.
+- `calendars` supports `INSERT` (create) and `DELETE` (remove, session-created only); `UPDATE` and
+  `MERGE` on it are not supported.
 - `RETURNING` is supported; writes are serialized; transient 429/5xx are retried with backoff.
-- Credential-free mock-backed sqllogictests are deferred to v2; `test/sql/live.test` exercises the
-  live API when `GOOGLE_CALENDAR_ACCESS_TOKEN` is set.
+- `test/sql/google_calendar.test` is credential-free and covers the catalog shape and the validation
+  errors; `test/sql/live.test` exercises the live API when `GOOGLE_CALENDAR_ACCESS_TOKEN` and
+  `GOOGLE_CALENDAR_PRIMARY_ID` are set.

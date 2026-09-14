@@ -18,6 +18,34 @@ namespace gcal_map {
 // Read mapping (JSON -> column) lives in calendar_scan.cpp's ExtractField. The write mapping below
 // is keyed by column name, so it stays correct regardless of column order in AddEventsColumns.
 
+// ---------- row identity ----------
+// `events` spans every calendar, so an event id alone no longer identifies a row: UPDATE/DELETE/MERGE
+// also need the calendar to issue the API call against. Rather than declare two row-id columns (the
+// binder supports it, but core's PhysicalMergeInto only consults the first for match detection and
+// PhysicalUpdate assumes the row id is the last chunk column), we keep D7's single VARCHAR rowid and
+// pack both halves into it. The separator is US (0x1f), which cannot occur in a Google calendar id
+// (mail-address shaped) or event id (base32hex).
+static constexpr char ROW_ID_SEPARATOR = '\x1f';
+
+inline string PackRowId(const string &calendar_id, const string &event_id) {
+	return calendar_id + ROW_ID_SEPARATOR + event_id;
+}
+
+// Splits a packed rowid back into its halves. Throws rather than guessing: a rowid without the
+// separator means it was synthesized outside the scan, and picking a calendar arbitrarily could
+// mutate the wrong one.
+inline void UnpackRowId(const string &packed, string &calendar_id, string &event_id) {
+	auto pos = packed.find(ROW_ID_SEPARATOR);
+	if (pos == string::npos) {
+		throw InvalidInputException(
+		    "google_calendar: malformed events rowid \"%s\" (expected \"<calendar_id>\\x1f<event_id>\"); "
+		    "UPDATE/DELETE/MERGE must key off rows produced by scanning the events table",
+		    packed);
+	}
+	calendar_id = packed.substr(0, pos);
+	event_id = packed.substr(pos + 1);
+}
+
 inline string FormatRfc3339(const Value &val) {
 	auto tstz = val.GetValue<timestamp_tz_t>();
 	timestamp_t ts(tstz.value);
@@ -188,6 +216,25 @@ inline bool ApplyColumn(nlohmann::json &event, const string &name, const Value &
 	return false;
 }
 
+// The destination calendar for an INSERT row. Unlike every other column this is not part of the
+// event body — it selects which calendar the events.insert is issued against, so it must be present
+// and non-NULL.
+inline string RowCalendarId(DataChunk &chunk, idx_t row, const vector<string> &names) {
+	for (idx_t c = 0; c < names.size(); c++) {
+		if (names[c] == "calendar_id") {
+			auto v = chunk.GetValue(c, row);
+			if (v.IsNull()) {
+				throw InvalidInputException(
+				    "google_calendar: INSERT INTO events requires a non-NULL calendar_id (it selects the "
+				    "destination calendar); pick one from the calendars table");
+			}
+			return v.ToString();
+		}
+	}
+	throw InvalidInputException("google_calendar: INSERT INTO events requires a calendar_id column (it selects "
+	                            "the destination calendar); pick one from the calendars table");
+}
+
 // Does this row/SET carry an all_day=true value? (Drives start/end date-vs-dateTime encoding.)
 inline bool RowAllDay(DataChunk &chunk, idx_t row, const vector<string> &names) {
 	for (idx_t c = 0; c < names.size(); c++) {
@@ -210,7 +257,21 @@ inline nlohmann::json RowToEvent(DataChunk &chunk, idx_t row, const vector<strin
 }
 
 // Apply one SET column (by name) to an existing event during UPDATE.
-inline void ApplySet(nlohmann::json &event, const string &name, const Value &val, bool all_day) {
+inline void ApplySet(nlohmann::json &event, const string &name, const Value &val, bool all_day,
+                     const string &current_calendar_id) {
+	if (name == "calendar_id") {
+		// `UPDATE ... SET calendar_id` to the value the row already has is a no-op, which is what
+		// `MERGE ... WHEN MATCHED THEN UPDATE BY NAME` produces when the source carries calendar_id.
+		// Changing it would mean moving the event between calendars (events.move) — a different API
+		// call than the read-modify-write PUT this operator performs.
+		if (val.IsNull() || val.ToString() == current_calendar_id) {
+			return;
+		}
+		throw InvalidInputException(
+		    "google_calendar: calendar_id cannot be updated (event lives on \"%s\", SET requested \"%s\"); "
+		    "DELETE the event and INSERT it into the target calendar instead",
+		    current_calendar_id, val.ToString());
+	}
 	if (!ApplyColumn(event, name, val, all_day, /*update=*/true)) {
 		throw InvalidInputException("google_calendar: column \"%s\" is read-only and cannot be updated", name);
 	}
