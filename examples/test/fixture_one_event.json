@@ -1,0 +1,348 @@
+{
+  "responses": [
+    {
+      "status": 200,
+      "body": "{\"items\": [{\"id\": \"p_dental\", \"summary\": \"Dentist appointment\", \"status\": \"confirmed\", \"start\": {\"dateTime\": \"2026-01-05T10:00:00-05:00\"}, \"end\": {\"dateTime\": \"2026-01-05T11:00:00-05:00\"}}]}"
+    },
+    {
+      "status": 200,
+      "body": "{\"items\": [{\"id\": \"p_dental\", \"summary\": \"Dentist appointment\", \"status\": \"confirmed\", \"start\": {\"dateTime\": \"2026-01-05T10:00:00-05:00\"}, \"end\": {\"dateTime\": \"2026-01-05T11:00:00-05:00\"}}]}"
+    },
+    {
+      "status": 200,
+      "body": "{\"items\": [{\"id\": \"p_dental\", \"summary\": \"Dentist appointment\", \"status\": \"confirmed\", \"start\": {\"dateTime\": \"2026-01-05T10:00:00-05:00\"}, \"end\": {\"dateTime\": \"2026-01-05T11:00:00-05:00\"}}]}"
+    },
+    {
+      "status": 200,
+      "body": "{\"items\": [{\"id\": \"p_dental\", \"summary\": \"Dentist appointment\", \"status\": \"confirmed\", \"start\": {\"dateTime\": \"2026-01-05T10:00:00-05:00\"}, \"end\": {\"dateTime\": \"2026-01-05T11:00:00-05:00\"}}]}"
+    },
+    {
+      "status": 200,
+      "body": "{\"items\": [{\"id\": \"p_dental\", \"summary\": \"Dentist appointment\", \"status\": \"confirmed\", \"start\": {\"dateTime\": \"2026-01-05T10:00:00-05:00\"}, \"end\": {\"dateTime\": \"2026-01-05T11:00:00-05:00\"}}]}"
+    },
+    {
+      "status": 200,
+      "body": "{\"items\": [{\"id\": \"p_dental\", \"summary\": \"Dentist appointment\", \"status\": \"confirmed\", \"start\": {\"dateTime\": \"2026-01-05T10:00:00-05:00\"}, \"end\": {\"dateTime\": \"2026-01-05T11:00:00-05:00\"}}]}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    },
+    {
+      "status": 200,
+      "body": "{\"id\": \"created\", \"status\": \"confirmed\"}"
+    }
+  ]
+}
